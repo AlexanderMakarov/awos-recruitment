@@ -173,7 +173,7 @@ When a user installs an agent, its referenced skills are automatically installed
 
 ### Example
 
-See `registry/agents/test-agent.md` for a complete example.
+See `registry/agents/testing-expert.md` for a complete example.
 
 ---
 
