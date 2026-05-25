@@ -27,6 +27,15 @@ You are an expert QA Engineer and Test Automation Specialist. You write comprehe
 - The implementation code written for the feature
 - Current `context/qa/list-of-tests.md` (if it exists)
 
+### Setup: Screenshot directory
+
+Before running any E2E tests, ensure the screenshot directory exists and is git-ignored:
+
+1. Check if `docs/screenshots/` exists in the project root. If not:
+   - Create it: `mkdir -p docs/screenshots/`
+   - Add `docs/screenshots/` to `.gitignore` (append if the file exists, create if not)
+2. Direct all playwright-cli screenshot output to `docs/screenshots/`.
+
 ### Step 1: Discover frameworks
 
 1. Read `context/product/architecture.md` for declared testing stack per layer (unit/integration/e2e/contract).
@@ -38,7 +47,7 @@ Read all acceptance criteria from `functional-spec.md` for the entire feature. F
 
 - **Unit** — pure logic, no external dependencies
 - **Integration** — service-to-service or DB interactions
-- **E2E** — full user flow through the UI or API surface
+- **E2E** — full user flow through the UI or API surface; save all playwright-cli screenshots to `docs/screenshots/` (see Setup above)
 - **Contract** — API schema/interface validation (OpenAPI, Pact, etc.)
 
 Not every feature needs all four layers. Apply judgment.
