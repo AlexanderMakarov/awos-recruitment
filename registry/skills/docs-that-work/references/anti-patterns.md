@@ -1,6 +1,6 @@
 # Documentation Anti-Patterns
 
-How to recognize and avoid documentation bloat.
+How to recognize and avoid both documentation failure modes: writing what code already reveals (bloat), and not writing what code no longer reveals (drift).
 
 ## Bloated CLAUDE.md: Before & After
 
@@ -52,6 +52,8 @@ E-commerce storefront. Handles product browsing, cart, and checkout. Payments de
 
 Everything removed was discoverable. Everything kept requires human knowledge.
 
+Note the Zustand line: it is a drift rule ("previous migration was partial"). A drift rule belongs in root conventions only when it applies repo-wide, as here; when it pins down the shape of one package's code, put it in that package's Design Intent section instead (see `design-intent.md`).
+
 ## Catalog of Discoverable Content
 
 | Pattern | Why It's Discoverable | What an Agent Does Instead |
@@ -66,7 +68,7 @@ Everything removed was discoverable. Everything kept requires human knowledge.
 | Script commands | Read `package.json` scripts or `justfile` | Reads task runner config |
 | CI pipeline steps | Read `.github/workflows/` | Reads CI config |
 
-If it's in a file an agent can read, it doesn't need documentation.
+If it's in a file an agent can read, it doesn't need documentation — with one exception: when code has drifted from the intended pattern, the file shows the drift, not the intent. That case is covered by the guard in the test below.
 
 ## The Three-Question Test
 
@@ -91,7 +93,7 @@ Agents copy existing code. When an anti-pattern leaks into a package, every gene
 
 ### Without Design Intent
 
-A package has nine handlers that delegate to services and one legacy handler with raw SQL. An agent asked to add a handler imitates whichever file it reads first. If that's the legacy one, raw SQL spreads to the new handler — and each copy makes the anti-pattern look more canonical to the next agent.
+A package has one canonical handler that delegates to services and three report handlers with raw SQL — a shortcut that spread before anyone caught it. An agent asked to add another report imitates its nearest neighbors, so raw SQL lands in the new handler too — and each copy makes the anti-pattern look more canonical to the next agent. Obviously-labeled drift (a lone `legacy-*` file) is the easy case: agents avoid it unaided. Drift that is plausibly named, or in the majority, is what multiplies.
 
 ### With Design Intent
 
@@ -106,10 +108,10 @@ and flag the file as drift.
 Reference: `handlers/create-order.ts` is the canonical handler — copy its structure.
 
 - Do: validate input via schema at the top, one service call, return envelope
-- Don't: raw SQL in handlers (leaked into `legacy-report.ts` — do not replicate)
+- Don't: raw SQL in handlers (leaked into `sales-report.ts` and others — do not replicate)
 ```
 
-The agent follows `create-order.ts` and reports: "`legacy-report.ts` contradicts the documented Design Intent — flagging as drift, not replicating." Multiplication stops and the leak is surfaced instead of spread.
+The agent follows `create-order.ts` and reports: "the report handlers contradict the documented Design Intent — flagging as drift, not replicating." Multiplication stops and the leak is surfaced instead of spread.
 
 ## Common Mistakes
 
