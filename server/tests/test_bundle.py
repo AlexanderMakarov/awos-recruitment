@@ -920,3 +920,21 @@ async def test_bundle_hooks_traversal_names_rejected(client, bad):
     """
     response = await client.post("/bundle/hooks", json={"names": bad})
     assert response.status_code == 400
+
+
+async def test_bundle_includes_shell_scripts(asgi_app):
+    """Skills that ship shell scripts (gh-watch-reviews' scanner) must bundle them."""
+    transport = httpx.ASGITransport(app=asgi_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/bundle/skills",
+            json={"names": ["gh-watch-reviews"]},
+        )
+
+    buf = io.BytesIO(response.content)
+    with tarfile.open(fileobj=buf, mode="r:gz") as tar:
+        names = tar.getnames()
+
+    assert "gh-watch-reviews/scripts/scan.sh" in names, (
+        f"Expected scripts/scan.sh in archive, got {names}"
+    )

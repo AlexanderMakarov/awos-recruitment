@@ -582,6 +582,40 @@ def test_validate_skill_allows_readme_and_flat_references(tmp_path: Path):
     )
 
 
+def test_validate_skill_allows_shell_scripts(tmp_path: Path):
+    """Shell scripts under scripts/ are legitimate skill assets (e.g. gh-watch-reviews' scanner)."""
+    skill_dir = _make_skill_dir(tmp_path, "with-scanner", "ships a shell scanner")
+    scripts = skill_dir / "scripts"
+    scripts.mkdir()
+    (scripts / "scan.sh").write_text("#!/usr/bin/env bash\necho ok\n")
+    (scripts / "scan_test.sh").write_text("#!/usr/bin/env bash\necho ok\n")
+
+    results = validate_skills(tmp_path)
+
+    assert len(results) == 1
+    assert results[0].valid, (
+        f"Expected .sh scripts to pass, got errors: "
+        f"{[e.message for e in results[0].errors]}"
+    )
+
+
+def test_validate_skill_rejects_unknown_script_extension(tmp_path: Path):
+    """The scripts/ allowlist still rejects extensions outside it."""
+    skill_dir = _make_skill_dir(tmp_path, "with-ruby", "ships a ruby script")
+    scripts = skill_dir / "scripts"
+    scripts.mkdir()
+    (scripts / "scan.rb").write_text("puts 'ok'\n")
+
+    results = validate_skills(tmp_path)
+
+    assert len(results) == 1
+    assert not results[0].valid, "Expected scripts/scan.rb to be rejected"
+    messages = [e.message for e in results[0].errors]
+    assert any("scan.rb" in m and "disallowed extension" in m for m in messages), (
+        f"Expected disallowed-extension error for scan.rb, got: {messages}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # validate_hooks function tests
 # ---------------------------------------------------------------------------
