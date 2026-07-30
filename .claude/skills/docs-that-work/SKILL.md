@@ -47,7 +47,7 @@ See `references/claude-md-guide.md` for templates and examples.
 
 Agents treat existing code as the strongest signal for how new code should look. When an anti-pattern leaks into a package, nothing in the code says which pattern is canonical and which is drift — so agents replicate it. A Design Intent section writes the intended shape down.
 
-**Where:** package-level (i.e., service/module-level) CLAUDE.md, next to the code it shapes. Root `CLAUDE.md` stays constraints-only.
+**Where:** package-level (i.e., service/module-level) CLAUDE.md, next to the code it shapes. The root `CLAUDE.md` keeps its usual project-wide content (purpose, conventions, constraints) but never a Design Intent section.
 
 **Format:** conflict preamble + golden example pointer + 2–4 do/don't rules, plus a sanctioned exception line for any file that deviates on purpose (usually ~10 lines, 35 max):
 
