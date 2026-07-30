@@ -13,6 +13,7 @@
 #
 # Modes:
 #   --once   one scan; prints a result JSON and exits.
+#   --status report whether the watcher named by --pidfile is still running.
 #   (default) watch loop: rescan every --interval seconds until candidates
 #            appear (exit 0) or an error occurs (exit 1). Runs indefinitely;
 #            each poll checks for orphaning (PPID 1 — the launching session
@@ -21,6 +22,20 @@
 #            (used by tests; default 0 = no TTL). Quiet polls append a
 #            heartbeat line to --log.
 #
+# The wait between polls is a wall-clock deadline walked in --poll-step chunks,
+# not one long sleep. Two reasons: the orphan check then runs every step instead
+# of once per interval, and macOS does not count time spent asleep towards
+# sleep(1), so a single `sleep $INTERVAL` would leave the watcher silent for a
+# further full interval after the machine wakes. Comparing `date +%s` against
+# the deadline makes a wake-up scan immediately.
+#
+# --pidfile is how a watch outlives the Claude Code process that armed it: the
+# file is written at launch and removed only on the watcher's OWN exit paths
+# (candidates, error, TTL, orphan). A pidfile whose pid is gone therefore means
+# "armed, then killed from outside" — a session restart, a machine sleep that
+# took the terminal with it, a UI stop — which is what tells the skill to
+# re-arm. No pidfile means no watch is meant to be running.
+#
 # stdout is always a single JSON object:
 #   {"status":"candidates","checked_at":"...","candidates":[{number,title,author,url,createdAt,why}]}
 #   {"status":"empty","checked_at":"..."}          (--once only)
@@ -28,15 +43,26 @@
 #   {"status":"stale_in_progress","prs":[...]}     (in_progress entry older than 2h — needs the user; watch exit 4)
 #   {"status":"expired","checked_at":"..."}        (watch TTL, exit 3)
 #   {"status":"error","message":"..."}             (exit 1)
+#   {"status":"watch_running"|"watch_dead"|"watch_absent",...}  (--status only)
 #
-# Exit codes: 0 candidates found (or any --once outcome), 1 error,
+# Exit codes: 0 candidates found (or any --once/--status outcome), 1 error,
 #             3 watch TTL expired, 4 stale in_progress entry (watch mode).
 set -u
 
-REPO="" STATE_FILE="" ONCE=0 INTERVAL=900 TTL=0 LOG_FILE=""
+REPO="" STATE_FILE="" ONCE=0 STATUS_ONLY=0 INTERVAL=900 TTL=0 POLL_STEP=30
+LOG_FILE="" PIDFILE="" OWN_PIDFILE=0
 ADHOC_EXCLUDES=() ADHOC_DRAFTS=false
 
+# Remove the pidfile — only ever called on an exit this script chose. Anything
+# that kills the watcher without running this leaves the file behind on purpose.
+release_pidfile() {
+  [ "$OWN_PIDFILE" = 1 ] || return 0
+  rm -f "$PIDFILE"
+  OWN_PIDFILE=0
+}
+
 fail() {
+  release_pidfile
   jq -n --arg m "$1" '{status: "error", message: $m}'
   exit 1
 }
@@ -46,9 +72,12 @@ while [ $# -gt 0 ]; do
     --repo) REPO="$2"; shift 2 ;;
     --state) STATE_FILE="$2"; shift 2 ;;
     --once) ONCE=1; shift ;;
+    --status) STATUS_ONLY=1; shift ;;
     --interval) INTERVAL="$2"; shift 2 ;;
     --ttl) TTL="$2"; shift 2 ;;
+    --poll-step) POLL_STEP="$2"; shift 2 ;;
     --log) LOG_FILE="$2"; shift 2 ;;
+    --pidfile) PIDFILE="$2"; shift 2 ;;
     --exclude) ADHOC_EXCLUDES+=("$2"); shift 2 ;;
     --include-drafts) ADHOC_DRAFTS=true; shift ;;
     *) fail "unknown argument: $1" ;;
@@ -56,6 +85,27 @@ while [ $# -gt 0 ]; do
 done
 
 command -v jq >/dev/null 2>&1 || { echo '{"status":"error","message":"jq not found"}'; exit 1; }
+
+# --status answers one question — is the armed watcher still alive? — and needs
+# neither gh nor the state file, so it runs before their checks. It must stay
+# cheap: the skill calls it on a first pass just to notice a watch that died.
+if [ "$STATUS_ONLY" = 1 ]; then
+  [ -n "$PIDFILE" ] || fail "--status requires --pidfile"
+  [ -f "$PIDFILE" ] || { jq -n '{status: "watch_absent"}'; exit 0; }
+  WPID="$(jq -r '.pid // empty' "$PIDFILE" 2>/dev/null)" || WPID=""
+  # A pid alone is not proof: pids get reused, so confirm it is still this
+  # script before believing the watch is up.
+  if [ -n "$WPID" ] && kill -0 "$WPID" 2>/dev/null \
+     && ps -o command= -p "$WPID" 2>/dev/null | grep -q 'scan\.sh'; then
+    jq '. + {status: "watch_running"}' "$PIDFILE" 2>/dev/null \
+      || jq -n --argjson p "$WPID" '{status: "watch_running", pid: $p}'
+  else
+    jq '. + {status: "watch_dead"}' "$PIDFILE" 2>/dev/null \
+      || jq -n '{status: "watch_dead"}'
+  fi
+  exit 0
+fi
+
 command -v gh >/dev/null 2>&1 || fail "gh not found"
 [ -n "$REPO" ] || fail "--repo is required"
 [ -n "$STATE_FILE" ] || fail "--state is required"
@@ -228,38 +278,70 @@ if [ "$ONCE" = 1 ]; then
 fi
 
 # Watch loop.
-START=$SECONDS
+log_line() { [ -n "$LOG_FILE" ] && echo "gh-watch-reviews: $REPO · $1" >> "$LOG_FILE"; }
+
+# The launching session is gone (we were reparented to init): stop polling.
+# This only fires when the watcher outlives its parent — a Claude Code process
+# that is torn down normally takes its children with it, which is why the
+# pidfile, not this check, is what makes a dead watch noticeable afterwards.
+check_orphaned() {
+  [ "$(ps -o ppid= -p $$ | tr -d ' ')" = "1" ] || return 0
+  log_line "session gone — watcher exiting · $(now)"
+  release_pidfile
+  exit 0
+}
+
+check_ttl() {
+  [ "$TTL" -gt 0 ] || return 0
+  [ $(( $(date +%s) - START )) -ge "$TTL" ] || return 0
+  release_pidfile
+  jq -n --arg t "$(now)" '{status: "expired", checked_at: $t}'
+  exit 3
+}
+
+# Wait until the next scan is due, in POLL_STEP chunks, against a wall-clock
+# deadline: see the --poll-step note in the header.
+wait_for_next_scan() {
+  local due remaining
+  due=$(( $(date +%s) + INTERVAL ))
+  while :; do
+    remaining=$(( due - $(date +%s) ))
+    [ "$remaining" -le 0 ] && return 0
+    check_ttl
+    check_orphaned
+    if [ "$remaining" -lt "$POLL_STEP" ]; then sleep "$remaining"; else sleep "$POLL_STEP"; fi
+  done
+}
+
+START=$(date +%s)
+if [ -n "$PIDFILE" ]; then
+  jq -n --argjson p "$$" --arg r "$REPO" --argjson i "$INTERVAL" --arg t "$(now)" \
+    '{pid: $p, repo: $r, interval: $i, armed_at: $t}' > "$PIDFILE" \
+    || fail "could not write the pidfile: $PIDFILE"
+  OWN_PIDFILE=1
+fi
+log_line "watch armed · every ${INTERVAL}s · pid $$ · $(now)"
+
 while :; do
-  if [ "$(ps -o ppid= -p $$ | tr -d ' ')" = "1" ]; then
-    if [ -n "$LOG_FILE" ]; then
-      echo "gh-watch-reviews: $REPO · session gone — watcher exiting · $(now)" >> "$LOG_FILE"
-    fi
-    exit 0
-  fi
+  check_orphaned
   scan
   case "$SCAN_STATUS" in
     candidates)
+      release_pidfile
       echo "$SCAN_RESULT"
       exit 0
       ;;
     stale_in_progress)
+      release_pidfile
       echo "$SCAN_RESULT"
       exit 4
       ;;
     in_review)
-      if [ -n "$LOG_FILE" ]; then
-        echo "gh-watch-reviews: $REPO · review in progress — watching paused · checked $(now)" >> "$LOG_FILE"
-      fi
+      log_line "review in progress — watching paused · checked $(now)"
       ;;
     *)
-      if [ -n "$LOG_FILE" ]; then
-        echo "gh-watch-reviews: $REPO · no PRs need your review · checked $(now)" >> "$LOG_FILE"
-      fi
+      log_line "no PRs need your review · checked $(now)"
       ;;
   esac
-  if [ "$TTL" -gt 0 ] && [ $((SECONDS - START)) -ge "$TTL" ]; then
-    jq -n --arg t "$(now)" '{status: "expired", checked_at: $t}'
-    exit 3
-  fi
-  sleep "$INTERVAL"
+  wait_for_next_scan
 done

@@ -401,6 +401,112 @@ assert_eq "rc" 1 "$RC"
 assert_eq "status" "error" "$(jqout .status)"
 teardown
 
+# ---------- pidfile: telling "died unexpectedly" from "ended on purpose" ----------
+#
+# The pidfile is what survives the death of the Claude Code process that armed
+# the watcher: present-but-dead is the only signal the skill has that a watch
+# was armed and was killed from outside its own exit paths.
+
+status_of() { "$SCAN" --status --state "$STATE" --pidfile "$PIDFILE" 2>"$SANDBOX/stderr"; }
+
+CASE="--status: no pidfile → watch_absent"
+setup
+PIDFILE="$SANDBOX/watch.pid"
+OUT="$(status_of)"
+RC=$?
+assert_eq "rc" 0 "$RC"
+assert_eq "status" "watch_absent" "$(jqout .status)"
+teardown
+
+CASE="--status: live watcher → watch_running with its pid"
+setup
+PIDFILE="$SANDBOX/watch.pid"
+"$SCAN" --repo o/r --state "$STATE" --interval 30 --poll-step 1 --log "$LOG" --pidfile "$PIDFILE" >/dev/null 2>&1 &
+WPID=$!
+sleep 2
+OUT="$(status_of)"
+assert_eq "status" "watch_running" "$(jqout .status)"
+assert_eq "pid" "$WPID" "$(jqout .pid)"
+assert_eq "armed line logged" "yes" "$(grep -q "watch armed" "$LOG" && echo yes || echo no)"
+kill "$WPID" 2>/dev/null; wait "$WPID" 2>/dev/null
+teardown
+
+CASE="pidfile survives an external kill → watch_dead (this is the re-arm signal)"
+setup
+PIDFILE="$SANDBOX/watch.pid"
+"$SCAN" --repo o/r --state "$STATE" --interval 30 --poll-step 1 --log "$LOG" --pidfile "$PIDFILE" >/dev/null 2>&1 &
+WPID=$!
+sleep 2
+kill -TERM "$WPID" 2>/dev/null; wait "$WPID" 2>/dev/null
+assert_eq "pidfile kept" "yes" "$([ -f "$PIDFILE" ] && echo yes || echo no)"
+OUT="$(status_of)"
+assert_eq "status" "watch_dead" "$(jqout .status)"
+teardown
+
+CASE="pidfile removed on every deliberate exit path (candidates / error / ttl)"
+setup
+PIDFILE="$SANDBOX/watch.pid"
+pr 40 "Appeared" olga | jq -s . > "$FAKE_GH_DIR/requested.json"
+"$SCAN" --repo o/r --state "$STATE" --interval 1 --poll-step 1 --log "$LOG" --pidfile "$PIDFILE" >/dev/null 2>&1
+assert_eq "candidates exit removes pidfile" "no" "$([ -f "$PIDFILE" ] && echo yes || echo no)"
+echo "[]" > "$FAKE_GH_DIR/requested.json"
+"$SCAN" --repo o/r --state "$STATE" --interval 1 --ttl 1 --poll-step 1 --log "$LOG" --pidfile "$PIDFILE" >/dev/null 2>&1
+assert_eq "ttl exit removes pidfile" "no" "$([ -f "$PIDFILE" ] && echo yes || echo no)"
+echo "garbage" > "$FAKE_GH_DIR/unrequested.json"
+"$SCAN" --repo o/r --state "$STATE" --interval 1 --poll-step 1 --log "$LOG" --pidfile "$PIDFILE" >/dev/null 2>&1
+assert_eq "error exit removes pidfile" "no" "$([ -f "$PIDFILE" ] && echo yes || echo no)"
+teardown
+
+CASE="--status: pidfile whose pid was reused by an unrelated process → watch_dead"
+setup
+PIDFILE="$SANDBOX/watch.pid"
+jq -n --argjson p $$ '{pid: $p, repo: "o/r", interval: 900, armed_at: "2026-07-30 12:00:00 +04"}' > "$PIDFILE"
+OUT="$(status_of)"
+assert_eq "status" "watch_dead" "$(jqout .status)"
+teardown
+
+CASE="watch mode: TTL and orphan checks run on --poll-step, not once per interval"
+setup
+START=$(date +%s)
+OUT="$("$SCAN" --repo o/r --state "$STATE" --interval 60 --ttl 1 --poll-step 1 --log "$LOG" 2>"$SANDBOX/stderr")"
+RC=$?
+ELAPSED=$(( $(date +%s) - START ))
+assert_eq "rc" 3 "$RC"
+assert_eq "status" "expired" "$(jqout .status)"
+assert_eq "did not wait out the 60s interval" "yes" "$([ "$ELAPSED" -lt 15 ] && echo yes || echo no)"
+teardown
+
+CASE="watch mode: a wall-clock jump past the due time scans immediately"
+setup
+# Emulate the machine sleeping through the interval: `date` jumps forward while
+# the watcher is mid-wait. Without a wall-clock deadline the next scan would be
+# INTERVAL awake-seconds away and the jump would go unnoticed.
+mkdir -p "$SANDBOX/bin"
+cat > "$SANDBOX/bin/date" <<'FAKEDATE'
+#!/usr/bin/env bash
+# Adds SKEW_FILE's contents (seconds) to every epoch reading.
+if [ "$1" = "+%s" ]; then
+  skew=$(cat "${SKEW_FILE:-/dev/null}" 2>/dev/null || echo 0)
+  echo $(( $(/bin/date +%s) + ${skew:-0} ))
+else
+  exec /bin/date "$@"
+fi
+FAKEDATE
+chmod +x "$SANDBOX/bin/date"
+export SKEW_FILE="$SANDBOX/skew"
+echo 0 > "$SKEW_FILE"
+PATH="$SANDBOX/bin:$PATH" "$SCAN" --repo o/r --state "$STATE" --interval 3600 --poll-step 1 --log "$LOG" >/dev/null 2>&1 &
+WPID=$!
+sleep 2
+BEFORE=$(grep -c "no PRs need your review" "$LOG")
+echo 7200 > "$SKEW_FILE"   # two hours pass while it waits
+sleep 3
+AFTER=$(grep -c "no PRs need your review" "$LOG")
+kill "$WPID" 2>/dev/null; wait "$WPID" 2>/dev/null
+assert_eq "scanned again after the jump" "yes" "$([ "$AFTER" -gt "$BEFORE" ] && echo yes || echo no)"
+unset SKEW_FILE
+teardown
+
 # ---------- summary ----------
 
 echo

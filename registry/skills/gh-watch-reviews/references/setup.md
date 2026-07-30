@@ -6,6 +6,8 @@ Read this only when `.claude/gh-watch-reviews.local.json` is absent (first run i
 
 One file in the watched repo holds user config and machine-managed dedup state. `scripts/scan.sh` reads it on every scan; decision writes (see candidates.md) go through Read → modify → Write. Never ask the user to edit `state` by hand.
 
+Watch mode adds two machine-owned siblings, both written by the scanner and never by hand: `.claude/gh-watch-reviews.local.log` (heartbeats) and `.claude/gh-watch-reviews.local.pid` (the armed watcher — see SKILL.md Watch mode; a pidfile whose pid is dead is the signal that a watch was killed and needs re-arming).
+
 ```json
 {
   "config": {
@@ -42,7 +44,7 @@ Build `config` via ONE `AskUserQuestion` call with these four questions:
 3. Include draft PRs / extra author logins to always exclude? — multiSelect; "Other" collects free-text logins
 4. Where should reviews run? — Ask each time (recommended) / Always here, in this session / Always in a new tab (separate session) → `review_target`
 
-Then one housekeeping step for the files this interview is about to create — they shouldn't be committed. Only if `git check-ignore -q .claude/gh-watch-reviews.local.json` exits non-zero, a second `AskUserQuestion`: where to add the ignore entry `gh-watch-reviews.local.*` (it covers the state file and the watch log) — global gitignore (recommended, covers every repo; `git config --global core.excludesFile`, default `~/.config/git/ignore`) / repo `.gitignore` / repo `.git/info/exclude` / skip
+Then one housekeeping step for the files this interview is about to create — they shouldn't be committed. Only if `git check-ignore -q .claude/gh-watch-reviews.local.json` exits non-zero, a second `AskUserQuestion`: where to add the ignore entry `gh-watch-reviews.local.*` (it covers the state file, the watch log, and the watcher pidfile) — global gitignore (recommended, covers every repo; `git config --global core.excludesFile`, default `~/.config/git/ignore`) / repo `.gitignore` / repo `.git/info/exclude` / skip
 
 Write the file with the answers and empty `state`, apply the chosen gitignore entry, then continue with the invoked pass.
 

@@ -30,10 +30,16 @@ The auto modes never publish anything unattended — `pr-review`'s own gates sti
   2. Launch per references/review-target.md. If the launch itself fails (not the fallback — the fallback "launch" is printing the command), remove the entry and ask the user how to proceed.
   3. Move to the **next candidate immediately** — never wait for the external session. The scanner tracks its completion from GitHub (review-target.md § Completion tracking).
 - **Skip** (asked mode, or the user says so) → write `{sha, decision: "skipped", via, at: <date -u +%FT%TZ>}`; next candidate. (Sticky — see setup.md.)
-- **Stop watching** (asked mode, or the user says so) → stop processing; remind the user how to stop the recurring form they're using (`/loop` or the background watcher).
+- **Stop watching** (asked mode, or the user says so) → stop processing. For a `/loop`, remind the user how to end it. For the background watcher, end it for good — kill the process and delete the pidfile, in that order:
+
+  ```bash
+  kill "$(jq -r .pid .claude/gh-watch-reviews.local.pid 2>/dev/null)" 2>/dev/null; rm -f .claude/gh-watch-reviews.local.pid
+  ```
+
+  Deleting the pidfile is what makes the stop stick: a pidfile left behind with a dead pid reads as "killed unexpectedly" and re-arms the watch on the next pass.
 
 While you're writing state anyway, prune entries whose PRs are closed or merged.
 
 ## After the pass
 
-In watch mode, a finished pass means the watcher is no longer running — re-arm it per SKILL.md and tell the user in one line. Entries left `in_progress` by new-tab launches keep the scanner in a paused `in_review` state until those reviews are submitted; it resumes scanning by itself. In `/loop` or one-shot mode, just end the turn.
+In watch mode, a finished pass means the watcher exited (and cleared its pidfile) — re-arm it per SKILL.md and tell the user in one line. Entries left `in_progress` by new-tab launches keep the scanner in a paused `in_review` state until those reviews are submitted; it resumes scanning by itself. In `/loop` or one-shot mode, just end the turn.
