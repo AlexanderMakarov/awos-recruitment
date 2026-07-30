@@ -21,7 +21,7 @@ All discovery, filtering, and dedup logic is deterministic and lives in `scripts
 `args` — one of:
 
 - empty → one pass over the repo of the current working directory (`gh repo view --json nameWithOwner -q .nameWithOwner`)
-- `watch [interval]` → arm the background watcher (see Watch mode); interval accepts `30s`/`10m`/`1h`, default 15m
+- `watch [interval]` → arm the background watcher (see Watch mode). `interval` accepts `30s`/`10m`/`1h` and overrides `config.poll_interval_minutes` for this invocation only; with no argument the configured value is used (15m if the config predates the setting)
 - `reconfigure` → re-run the config interview (references/setup.md), keep `state` untouched, then do a normal pass
 - ad-hoc overrides, applied to this invocation only: `exclude: <login>[, <login>…]` → `--exclude <login>` per login; `include-drafts` → `--include-drafts`
 
@@ -36,7 +36,7 @@ gh repo view --json nameWithOwner -q .nameWithOwner
 bash "<skill-base-dir>/scripts/scan.sh" --status --pidfile .claude/gh-watch-reviews.local.pid
 ```
 
-`watch_dead` means a watcher was armed here and was killed from outside its own exit paths — almost always because the Claude Code process that owned it went away (restart, crash, quit, or a machine sleep that took the terminal with it). Say so in one line and re-arm it (Watch mode step 2) after this pass completes. `watch_running` means a watcher is already polling this repo: do the pass, but never arm a second one. `watch_absent` means no watch is meant to be running — do not arm one unless args said `watch`. Then Read `.claude/gh-watch-reviews.local.json`. If the file is absent, this is the first run — read references/setup.md and follow it (interview → write file). Otherwise: if `config.review_target` is missing (config from an older skill version), ask the one missing question — Where should reviews run? Ask each time (recommended) / Always here / Always in a new tab — and write the answer into `config` before anything else. Then print exactly one compact line so the user knows what's being watched — with the real `owner/repo`, so resolve it before printing — e.g. `gh-watch-reviews: watching owner/repo · bots excluded · drafts excluded · unrequested PRs on`. Later passes in the same session skip this step entirely — no re-read, no repeated line; a quiet later tick is exactly one tool call (the scanner reads the file itself, and its "state file not found" error is the first-run signal if the file has vanished).
+`watch_dead` means a watcher was armed here and was killed from outside its own exit paths — almost always because the Claude Code process that owned it went away (restart, crash, quit, or a machine sleep that took the terminal with it). Say so in one line and re-arm it (Watch mode step 2) after this pass completes. `watch_running` means a watcher is already polling this repo: do the pass, but never arm a second one. `watch_absent` means no watch is meant to be running — do not arm one unless args said `watch`. Then Read `.claude/gh-watch-reviews.local.json`. If the file is absent, this is the first run — read references/setup.md and follow it (interview → write file). Otherwise: if any of `config.review_target`, `config.poll_interval_minutes`, `config.stale_review_hours` is missing (config from an older skill version), ask ONLY for those, in one `AskUserQuestion` call, using the wording in references/setup.md § The interview (questions 4–6), and write the answers into `config` before anything else. Then print exactly one compact line so the user knows what's being watched — with the real `owner/repo`, so resolve it before printing — e.g. `gh-watch-reviews: watching owner/repo · bots excluded · drafts excluded · unrequested PRs on`. Later passes in the same session skip this step entirely — no re-read, no repeated line; a quiet later tick is exactly one tool call (the scanner reads the file itself, and its "state file not found" error is the first-run signal if the file has vanished).
 2. Run the scanner — ONE Bash call:
 
 ```bash
@@ -47,7 +47,7 @@ bash "<skill-base-dir>/scripts/scan.sh" --repo <owner/repo> --state .claude/gh-w
 
 - `error` (exit 1) → emit exactly one line — `gh-watch-reviews: search failed — <message>` — and stop the pass. Never continue past a failure: a silent "nothing needs review" is the one outcome a watch must never produce from an error.
 - `in_review` → a review handed off earlier is still being worked and this tick fired mid-review: **stop silently — produce no output at all.**
-- `stale_in_progress` → an `in_progress` entry is older than 2h and the scanner could not resolve it from GitHub (no submitted review, PR still open). Ask the user whether that review is genuinely still running; if not, remove the listed entries from `state` (Read → modify → Write) and re-run the pass from step 2.
+- `stale_in_progress` → an `in_progress` entry has held the in-flight lock longer than `config.stale_review_hours` and the scanner could not resolve it from GitHub (no submitted review, PR still open). Quote the returned `held_for_over_hours` — never a number of your own — and ask the user whether that review is genuinely still running; if not, remove the listed entries from `state` (Read → modify → Write) and re-run the pass from step 2.
 - `empty` → end the turn with exactly ONE compact heartbeat line and nothing else, using the returned `checked_at` verbatim (never invent, round, or approximate a timestamp): `gh-watch-reviews: owner/repo · no PRs need your review · checked <checked_at>`. This single line IS the entire quiet-tick deliverable — no second line, no summary of what was checked.
 - `candidates` → read references/candidates.md and process them as it directs.
 
@@ -61,6 +61,8 @@ bash "<skill-base-dir>/scripts/scan.sh" --repo <owner/repo> --state .claude/gh-w
 ```bash
 bash "<skill-base-dir>/scripts/scan.sh" --repo <owner/repo> --state .claude/gh-watch-reviews.local.json --interval <seconds> --log .claude/gh-watch-reviews.local.log --pidfile .claude/gh-watch-reviews.local.pid
 ```
+
+`<seconds>` comes from the `watch` argument if it had one, else `config.poll_interval_minutes × 60`. On a re-arm, reuse the interval the dead watcher was running with — it is in the pidfile (`interval`) and in the config; never silently fall back to the default, since a cadence the user chose must survive the restart that killed the watcher. The staleness threshold needs no flag: the scanner reads `config.stale_review_hours` itself, on every scan, so a change to it applies without re-arming.
 
 3. Tell the user in one line that the watch is armed and where the heartbeat log lives, then end the turn. The script polls quietly (heartbeats go to the log, not the session) and runs indefinitely — it exits on its own only for: candidates found (exit 0), search/auth error (exit 1), a stale `in_progress` entry (exit 4), or the session having gone away (exit 0, silent).
 4. When a notification for that background task arrives, act on it by what it says:

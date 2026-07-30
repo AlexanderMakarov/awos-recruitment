@@ -401,6 +401,63 @@ assert_eq "rc" 1 "$RC"
 assert_eq "status" "error" "$(jqout .status)"
 teardown
 
+# ---------- how long a review may hold the in-flight lock ----------
+
+# An entry this old is 90 min in — inside the 2h default, outside a 1h setting.
+at_90min_ago() { jq -rn --argjson t "$(( $(date -u +%s) - 5400 ))" '$t | todate'; }
+
+CASE="stale threshold defaults to 2h when config says nothing"
+setup
+write_state "{\"22\": {\"sha\": \"aaa\", \"decision\": \"in_progress\", \"via\": \"requested\", \"at\": \"$(at_90min_ago)\"}}"
+run_once
+assert_eq "90min entry still just pauses" "in_review" "$(jqout .status)"
+teardown
+
+CASE="config.stale_review_hours shortens the threshold"
+setup
+write_state "{\"22\": {\"sha\": \"aaa\", \"decision\": \"in_progress\", \"via\": \"requested\", \"at\": \"$(at_90min_ago)\"}}" '{"stale_review_hours": 1}'
+run_once
+assert_eq "status" "stale_in_progress" "$(jqout .status)"
+assert_eq "prs" "22" "$(jqout '.prs | join(",")')"
+assert_eq "reports the threshold it used" "1" "$(jqout .held_for_over_hours)"
+teardown
+
+CASE="config.stale_review_hours lengthens the threshold"
+setup
+write_state '{"22": {"sha": "aaa", "decision": "in_progress", "via": "requested", "at": "2026-07-01T00:00:00Z"}}' '{"stale_review_hours": 720}'
+echo '{"state": "OPEN", "reviews": []}' > "$FAKE_GH_DIR/reviews-22.json"
+run_once
+assert_eq "ancient entry still inside a 30-day window" "in_review" "$(jqout .status)"
+teardown
+
+CASE="fractional hours accepted (0.5h = 30min)"
+setup
+write_state "{\"22\": {\"sha\": \"aaa\", \"decision\": \"in_progress\", \"via\": \"requested\", \"at\": \"$(at_90min_ago)\"}}" '{"stale_review_hours": 0.5}'
+run_once
+assert_eq "status" "stale_in_progress" "$(jqout .status)"
+teardown
+
+CASE="--stale-hours overrides config for one run, config unchanged"
+setup
+write_state "{\"22\": {\"sha\": \"aaa\", \"decision\": \"in_progress\", \"via\": \"requested\", \"at\": \"$(at_90min_ago)\"}}" '{"stale_review_hours": 8}'
+run_once
+assert_eq "config 8h → pauses" "in_review" "$(jqout .status)"
+run_once --stale-hours 1
+assert_eq "flag 1h → stale" "stale_in_progress" "$(jqout .status)"
+assert_eq "config not rewritten" "8" "$(jq -r '.config.stale_review_hours' "$STATE")"
+teardown
+
+CASE="a nonsense threshold is an error, never a silently-ignored setting"
+setup
+write_state "{\"22\": {\"sha\": \"aaa\", \"decision\": \"in_progress\", \"via\": \"requested\", \"at\": \"$(at_90min_ago)\"}}" '{"stale_review_hours": "soon"}'
+run_once
+assert_eq "rc" 1 "$RC"
+assert_eq "status" "error" "$(jqout .status)"
+write_state "{\"22\": {\"sha\": \"aaa\", \"decision\": \"in_progress\", \"via\": \"requested\", \"at\": \"$(at_90min_ago)\"}}" '{"stale_review_hours": 0}'
+run_once
+assert_eq "zero rejected" "error" "$(jqout .status)"
+teardown
+
 # ---------- pidfile: telling "died unexpectedly" from "ended on purpose" ----------
 #
 # The pidfile is what survives the death of the Claude Code process that armed

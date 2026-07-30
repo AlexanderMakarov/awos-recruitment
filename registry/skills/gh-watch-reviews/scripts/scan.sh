@@ -40,7 +40,9 @@
 #   {"status":"candidates","checked_at":"...","candidates":[{number,title,author,url,createdAt,why}]}
 #   {"status":"empty","checked_at":"..."}          (--once only)
 #   {"status":"in_review","checked_at":"..."}      (--once only: a review is in progress — the tick is a no-op)
-#   {"status":"stale_in_progress","prs":[...]}     (in_progress entry older than 2h — needs the user; watch exit 4)
+#   {"status":"stale_in_progress","held_for_over_hours":N,"prs":[...]}
+#                                                  (an in_progress entry has held the in-flight lock longer than
+#                                                   --stale-hours / config.stale_review_hours / 2 — needs the user; watch exit 4)
 #   {"status":"expired","checked_at":"..."}        (watch TTL, exit 3)
 #   {"status":"error","message":"..."}             (exit 1)
 #   {"status":"watch_running"|"watch_dead"|"watch_absent",...}  (--status only)
@@ -50,7 +52,8 @@
 set -u
 
 REPO="" STATE_FILE="" ONCE=0 STATUS_ONLY=0 INTERVAL=900 TTL=0 POLL_STEP=30
-LOG_FILE="" PIDFILE="" OWN_PIDFILE=0
+LOG_FILE="" PIDFILE="" OWN_PIDFILE=0 STALE_HOURS=""
+DEFAULT_STALE_HOURS=2
 ADHOC_EXCLUDES=() ADHOC_DRAFTS=false
 
 # Remove the pidfile — only ever called on an exit this script chose. Anything
@@ -76,6 +79,7 @@ while [ $# -gt 0 ]; do
     --interval) INTERVAL="$2"; shift 2 ;;
     --ttl) TTL="$2"; shift 2 ;;
     --poll-step) POLL_STEP="$2"; shift 2 ;;
+    --stale-hours) STALE_HOURS="$2"; shift 2 ;;
     --log) LOG_FILE="$2"; shift 2 ;;
     --pidfile) PIDFILE="$2"; shift 2 ;;
     --exclude) ADHOC_EXCLUDES+=("$2"); shift 2 ;;
@@ -125,6 +129,23 @@ scan() {
   [ -f "$STATE_FILE" ] || fail "state file not found: $STATE_FILE (run the skill once to create it)"
   jq -e 'has("config") and has("state")' "$STATE_FILE" >/dev/null 2>&1 \
     || fail "state file is not valid gh-watch-reviews JSON: $STATE_FILE"
+
+  # How long a review may hold the in-flight lock before the user is asked about
+  # it: --stale-hours wins, else config.stale_review_hours, else the default.
+  # Re-read per scan so an edit to the config takes effect without a re-arm.
+  local stale_hours stale_seconds
+  stale_hours="$STALE_HOURS"
+  if [ -z "$stale_hours" ]; then
+    stale_hours="$(jq -r --argjson d "$DEFAULT_STALE_HOURS" \
+      '(.config.stale_review_hours // $d) | tostring' "$STATE_FILE" 2>/dev/null)" \
+      || stale_hours="$DEFAULT_STALE_HOURS"
+  fi
+  case "$stale_hours" in
+    ''|*[!0-9.]*) fail "stale_review_hours must be a positive number, got: $stale_hours" ;;
+  esac
+  stale_seconds="$(jq -n --argjson h "$stale_hours" '($h * 3600) | floor')" \
+    || fail "could not compute the staleness threshold from: $stale_hours"
+  [ "$stale_seconds" -gt 0 ] || fail "stale_review_hours must be greater than zero"
 
   # In-flight guard: an in_progress entry means a review is being worked right
   # now — the whole scan is a no-op until it completes. But first try to
@@ -177,12 +198,15 @@ scan() {
       "$STATE_FILE")" || fail "in-flight guard recheck failed"
   fi
 
-  # What survives resolution: an entry older than 2h is probably a crashed
-  # review; only the user can say, so surface it. An unparseable `at` counts
-  # as stale — it must reach the user, not hide.
-  if [ "$(echo "$guard" | jq '[.[] | select(.age >= 7200)] | length')" -gt 0 ]; then
+  # What survives resolution: an entry held longer than the threshold is
+  # probably a review that died (closed tab, killed session) and will never
+  # resolve itself; nothing here can tell that from a slow review, so surface it
+  # and let the user say. An unparseable `at` counts as stale — it must reach
+  # the user, not hide.
+  if [ "$(echo "$guard" | jq --argjson s "$stale_seconds" '[.[] | select(.age >= $s)] | length')" -gt 0 ]; then
     SCAN_STATUS="stale_in_progress"
-    SCAN_RESULT="$(echo "$guard" | jq '{status: "stale_in_progress", prs: [.[] | select(.age >= 7200) | .number | tonumber]}')"
+    SCAN_RESULT="$(echo "$guard" | jq --argjson s "$stale_seconds" --argjson h "$stale_hours" \
+      '{status: "stale_in_progress", held_for_over_hours: $h, prs: [.[] | select(.age >= $s) | .number | tonumber]}')"
     return
   fi
   if [ "$(echo "$guard" | jq 'length')" -gt 0 ]; then
