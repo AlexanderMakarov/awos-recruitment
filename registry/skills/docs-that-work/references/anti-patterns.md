@@ -77,8 +77,8 @@ Before adding any line to documentation, ask:
 1. **Could an agent find this by reading a config file?**
 2. **Could an agent find this by reading source code?**
 3. **Could an agent find this by running a standard command?**
-If any answer is **yes**, don't write it — with one guard:
-   1. **Is what's discoverable actually what's intended?** If the code has drifted from the intended pattern, the intent is no longer discoverable. Write it — as a Design Intent section (see `design-intent.md` in this directory).
+
+If any answer is **yes**, don't write it — with one guard: **is what's discoverable actually what's intended?** If the code has drifted from the intended pattern, the intent is no longer discoverable. Write it — as a Design Intent section (see `design-intent.md` in this directory).
 
 ### Examples
 

@@ -39,7 +39,7 @@ Every line you add has a maintenance cost that compounds across every session. S
 - Root `CLAUDE.md` — project-wide context applicable everywhere
 - Service-level `CLAUDE.md` — that module's non-obvious constraints and, where useful, its Design Intent; never repeat root content
 
-**Size:** target <70 lines total — ~35 for non-obvious constraints, ~35 for Design Intent. A CLAUDE.md without a Design Intent section should stay around 35. Past 70, it's bloated. Cut ruthlessly.
+**Size:** non-obvious constraints ~35 lines; Design Intent usually ~10 lines, 35 max; <70 combined ceiling. A CLAUDE.md without a Design Intent section should stay around 35. Past the ceiling, it's bloated. Cut ruthlessly.
 
 See `references/claude-md-guide.md` for templates and examples.
 
@@ -49,7 +49,7 @@ Agents treat existing code as the strongest signal for how new code should look.
 
 **Where:** package-level (i.e., service/module-level) CLAUDE.md, next to the code it shapes. Root `CLAUDE.md` stays constraints-only.
 
-**Format:** conflict preamble + golden example pointer + 2–4 do/don't rules (~35 lines max):
+**Format:** conflict preamble + golden example pointer + 2–4 do/don't rules, plus a sanctioned exception line for any file that deviates on purpose (usually ~10 lines, 35 max):
 
 ```markdown
 # Design Intent
@@ -61,11 +61,12 @@ Reference: `handlers/create-order.ts` is the canonical handler — copy its stru
 
 - Do: validate input via schema at the top, one service call, return envelope
 - Don't: raw SQL in handlers (leaked into `sales-report.ts` and others — do not replicate)
+- Exception: `handlers/bulk-export.ts` streams raw SQL (perf-critical path) — not drift, do not "fix"
 ```
 
-**The conflict rule:** Design Intent outranks existing code. When existing code contradicts it, follow Design Intent and flag the contradicting file as drift — never silently replicate the drifted pattern, and never silently ignore the mismatch.
+**The conflict rule:** Design Intent outranks existing code. When existing code contradicts it, follow Design Intent and flag the contradicting file as drift — never silently replicate the drifted pattern, and never silently ignore the mismatch. To flag: name the file and the contradicted rule in your final summary or PR description; do not edit the drifted file or the CLAUDE.md unless asked. A file named in an Exception line is not drift — leave it alone.
 
-**Authoring:** propose from code, human confirms. Draft the golden example and rules from the dominant or best pattern, then get human confirmation before it lands — if the anti-pattern IS the majority pattern, inferring intent autonomously enshrines the drift.
+**Authoring:** propose from code, human confirms. Draft the golden example and rules from the dominant or best pattern, then get human confirmation before it lands — if the anti-pattern IS the majority pattern, inferring intent autonomously enshrines the drift. If no human is available, mark the heading `# Design Intent (unconfirmed proposal)` — never present inferred intent as confirmed.
 
 See `references/design-intent.md` for the full format spec, authoring protocol, and maintenance rules.
 

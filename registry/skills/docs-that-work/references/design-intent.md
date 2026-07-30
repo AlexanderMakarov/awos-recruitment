@@ -12,7 +12,7 @@ Agents treat existing code as the strongest signal for how new code should look.
 
 ## The Canonical Format
 
-Every Design Intent section has three parts: the conflict preamble, a golden example pointer, and 2–4 do/don't rules.
+Every Design Intent section has three parts — the conflict preamble, a golden example pointer, and 2–4 do/don't rules — plus a fourth, present only when needed: sanctioned exception lines for files that deviate from the intent on purpose.
 
 ```markdown
 # Design Intent
@@ -24,9 +24,10 @@ Reference: `handlers/create-order.ts` is the canonical handler — copy its stru
 
 - Do: validate input via schema at the top, one service call, return envelope
 - Don't: raw SQL in handlers (leaked into `sales-report.ts` and others — do not replicate)
+- Exception: `handlers/bulk-export.ts` streams raw SQL (perf-critical path) — not drift, do not "fix"
 ```
 
-Budget: ~35 lines. Combined with the non-obvious constraints (~35 lines), the whole CLAUDE.md stays under 70.
+Budget: usually ~10 lines, 35 max. Combined with the non-obvious constraints (~35 lines), the whole CLAUDE.md stays under 70.
 
 ### The conflict preamble
 
@@ -49,6 +50,15 @@ A drift callout is a known, located anti-pattern — not a vague warning:
 - State it as a Don't rule ending with "— do not replicate"
 - One callout per anti-pattern; if the same leak is in many files, name the worst offender and say "and others"
 
+### Sanctioned exceptions
+
+The mirror of a drift callout: a named, located deviation that is *deliberate* — a perf-critical path, a module frozen against a vendor contract. Without this line, the conflict rule cannot tell a leaked anti-pattern from an intentional choice: the file gets re-flagged as drift on every pass, and an agent following the rule may "fix" it, breaking the intentional choice.
+
+- Name the specific file, state how it deviates and why (in parentheses)
+- End with "— not drift, do not \"fix\""
+- One line per exception; a file listed here is exempt from the conflict rule
+- Only a human can sanction an exception. When proposing a Design Intent section, list suspected deliberate deviations as questions for the human — never write an Exception line into an unconfirmed proposal, or drift gets laundered into sanctioned status.
+
 ## Shapes of Design Intent
 
 Design Intent is language-agnostic: the format — preamble + golden example + rules — is identical in any ecosystem. What varies is the shape being pinned down. Common shapes:
@@ -56,7 +66,7 @@ Design Intent is language-agnostic: the format — preamble + golden example + r
 | Shape | What it pins down | Example rule |
 | --- | --- | --- |
 | Layering | Which layers may talk to which | Handlers call services, never the DB driver (TypeScript API) |
-| Error handling | How failures propagate | All failures raise `DomainError` subclasses — no bare `throw` or exit (Python) |
+| Error handling | How failures propagate | All failures raise `DomainError` subclasses — never builtin exceptions or `sys.exit()` (Python) |
 | State ownership | Where state is allowed to live | Cart state lives in the Zustand store, never in component state (React) |
 | Dependency direction | Which modules may import which | `core/` never imports from `api/` or `cli/` — dependencies point inward (Go) |
 | Extension points | How new variants plug in | New exporters implement `Exporter` and register in the registry — never switch on type (Java) |
@@ -100,11 +110,12 @@ Intent cannot be inferred from drifted code. If the anti-pattern IS the majority
 
 1. **Scan the package.** Identify the dominant pattern and the best-shaped file.
 2. **Draft the section.** Candidate golden example, 2–4 do/don't rules, suspected drift files.
-3. **Present the draft as a proposal.** Ask the human to confirm or correct — especially the golden example choice and the drift callouts.
+3. **Present the draft as a proposal.** Ask the human to confirm or correct — especially the golden example choice, the drift callouts, and any suspected deliberate deviations (which become Exception lines only if the human confirms them).
 4. **Only confirmed content lands.** If no human is available, mark the section heading `# Design Intent (unconfirmed proposal)` — never present inferred intent as confirmed.
 
 ## Maintenance
 
 - **Drift fixed** (anti-pattern refactored away) → delete its callout.
+- **Exception lifted** (the deviating file refactored to the intended shape, or removed) → delete its Exception line.
 - **Golden example refactored or renamed** → re-point the reference.
 - **A rule stops being true** → remove it. Stale intent causes worse decisions than no intent — the same principle as the rest of this skill.
