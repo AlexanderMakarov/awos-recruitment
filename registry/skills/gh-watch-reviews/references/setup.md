@@ -56,7 +56,13 @@ Second call — the two timings, each of which needs its explanation in the ques
 5. How often should the watcher check GitHub? — `Every 15 minutes (recommended)` / `Every 5 minutes` / `Every hour` → `poll_interval_minutes`. Explain: polling happens in a background script, so a quiet check costs no tokens and no session context — the only thing a shorter interval buys is lower latency on a new PR, and the only thing it costs is GitHub API traffic.
 6. A review is handed off and then never finishes — the tab was closed, the session died. How long before I ask you about it? — `After 2 hours (recommended)` / `After 1 hour` / `After 8 hours` → `stale_review_hours`. Explain: while a review is marked in progress the watch is paused so it won't re-surface the PR you're on, and that pause normally ends by itself the moment the review is submitted or the PR is merged. Nothing can see whether a review session is still alive, so this timeout is the only thing that distinguishes "still working" from "gone" — after it, the watch asks you instead of staying quiet indefinitely.
 
-Then one housekeeping step for the files this interview is about to create — they shouldn't be committed. Only if `git check-ignore -q .claude/gh-watch-reviews.local.json` exits non-zero, a second `AskUserQuestion`: where to add the ignore entry `gh-watch-reviews.local.*` (it covers the state file, the watch log, and the watcher pidfile) — global gitignore (recommended, covers every repo; `git config --global core.excludesFile`, default `~/.config/git/ignore`) / repo `.gitignore` / repo `.git/info/exclude` / skip
+Then one housekeeping step for the files this interview is about to create — none of them should be committed. Check **every** one, not just the state file:
+
+```bash
+[ "$(git check-ignore .claude/gh-watch-reviews.local.json .claude/gh-watch-reviews.local.log .claude/gh-watch-reviews.local.pid | wc -l)" -eq 3 ] && echo covered || echo needs-ignore
+```
+
+Count the matches — don't use `-q` (it rejects multiple pathnames) and don't trust the exit status, which is 0 when *any* single path matches. All three must be covered: an entry naming one file, or an incidental rule like `*.log`, leaves the others turning up in `git status` later. Only on `needs-ignore`, ask where to add the entry — always the glob `.claude/gh-watch-reviews.local.*`, never a single filename, so the log, the pidfile, and anything this skill adds later are covered — global gitignore (recommended, covers every repo; `git config --global core.excludesFile`, default `~/.config/git/ignore`) / repo `.gitignore` / repo `.git/info/exclude` / skip
 
 Write the file with the answers and empty `state`, apply the chosen gitignore entry, then continue with the invoked pass.
 
