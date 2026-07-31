@@ -1,7 +1,7 @@
 ---
 name: gh-watch-reviews
 description: Use when the user wants to watch the current GitHub repo for pull requests that need their review — new PRs, explicit review requests, re-requests after new commits — e.g. "watch for incoming reviews", "check PRs needing my review", as the recurring body of a /loop invocation, or to arm a background watcher. GitHub-only (gh CLI). Not for reviewing one specific known PR (invoke pr-review directly).
-argument-hint: "[watch [interval] | reconfigure | exclude: <login>, ... | include-drafts]"
+argument-hint: "[loop [interval] | watch [interval] | reconfigure | exclude: <login>, ... | include-drafts]"
 ---
 
 <!-- Deliberately NOT `context: fork`: this skill needs AskUserQuestion and the Skill tool, which forked/subagent skills cannot use (same constraint as pr-review). -->
@@ -41,7 +41,7 @@ bash "<skill-base-dir>/scripts/scan.sh" --status --pidfile .claude/gh-watch-revi
 2. Run the scanner — ONE Bash call:
 
 ```bash
-bash "<skill-base-dir>/scripts/scan.sh" --repo <owner/repo> --state .claude/gh-watch-reviews.local.json --once
+bash "<skill-base-dir>/scripts/scan.sh" --once
 ```
 
 3. Act on the JSON `status`:
@@ -54,10 +54,10 @@ bash "<skill-base-dir>/scripts/scan.sh" --repo <owner/repo> --state .claude/gh-w
 
 ## Recurring mode
 
-The cheap way to keep watching. Run step 1 of "One pass" to resolve the repo, then invoke the `loop` skill with **this body verbatim** — substituting the real skill base directory, `owner/repo`, and the interval (`config.poll_interval_minutes` minutes, or the one given in args):
+The cheap way to keep watching. Run step 1 of "One pass" to resolve the repo, then invoke the `loop` skill with **this body verbatim** — substituting only the real skill base directory and the interval (`config.poll_interval_minutes` minutes, or the one given in args):
 
 ```
-Skill(skill="loop", args="15m Run this and nothing else: bash <skill-base-dir>/scripts/scan.sh --repo <owner/repo> --state .claude/gh-watch-reviews.local.json --once
+Skill(skill="loop", args="15m Run this and nothing else: bash <skill-base-dir>/scripts/scan.sh --once
 Then: if the JSON has a \"line\", reply with exactly that line and nothing else. If \"status\" is \"candidates\" or \"stale_in_progress\", invoke the gh-watch-reviews skill and follow it. Otherwise reply nothing.")
 ```
 
@@ -79,7 +79,7 @@ Its one limit: the schedule is in-memory and belongs to the session that created
 2. Launch the scanner with `run_in_background` (no `--once`):
 
 ```bash
-bash "<skill-base-dir>/scripts/scan.sh" --repo <owner/repo> --state .claude/gh-watch-reviews.local.json --interval <seconds> --log .claude/gh-watch-reviews.local.log --pidfile .claude/gh-watch-reviews.local.pid
+bash "<skill-base-dir>/scripts/scan.sh" --interval <seconds> --log .claude/gh-watch-reviews.local.log --pidfile .claude/gh-watch-reviews.local.pid
 ```
 
 `<seconds>` comes from the `watch` argument if it had one, else `config.poll_interval_minutes × 60`. On a re-arm, reuse the interval the dead watcher was running with — it is in the pidfile (`interval`) and in the config; never silently fall back to the default, since a cadence the user chose must survive the restart that killed the watcher. The staleness threshold needs no flag: the scanner reads `config.stale_review_hours` itself, on every scan, so a change to it applies without re-arming.

@@ -53,6 +53,13 @@ case "$args" in
     if [ -n "${FAKE_GH_UNREQUESTED_EXIT:-}" ]; then exit "$FAKE_GH_UNREQUESTED_EXIT"; fi
     cat "$FAKE_GH_DIR/unrequested.json" 2>/dev/null || echo "[]"
     ;;
+  *"repo view"*"nameWithOwner"*)
+    if [ -n "${FAKE_GH_REPOVIEW_EXIT:-}" ]; then
+      echo "${FAKE_GH_REPOVIEW_STDERR:-none of the git remotes configured for this repository point to a known GitHub host}" >&2
+      exit "$FAKE_GH_REPOVIEW_EXIT"
+    fi
+    echo "${FAKE_GH_REPO:-o/r}"
+    ;;
   *"api user"*)
     echo "${FAKE_GH_LOGIN:-me}"
     ;;
@@ -84,7 +91,8 @@ FAKE
 teardown() {
   rm -rf "$SANDBOX"
   unset FAKE_GH_AUTH_EXIT FAKE_GH_AUTH_STDERR FAKE_GH_REQUESTED_EXIT \
-        FAKE_GH_REQUESTED_STDERR FAKE_GH_UNREQUESTED_EXIT FAKE_GH_FAIL_UNTIL 2>/dev/null || true
+        FAKE_GH_REQUESTED_STDERR FAKE_GH_UNREQUESTED_EXIT FAKE_GH_FAIL_UNTIL \
+        FAKE_GH_REPO FAKE_GH_REPOVIEW_EXIT FAKE_GH_REPOVIEW_STDERR 2>/dev/null || true
 }
 
 # write_state '<state-object-json>' [config-overrides-json]
@@ -741,6 +749,59 @@ setup
 rm "$STATE"
 run_once
 assert_eq "terminal errors too" "yes" "$(echo "$OUT" | jq -r 'if (.line | length) > 20 then "yes" else "no" end')"
+teardown
+
+# ---------- defaults: `scan.sh --once` with no other arguments ----------
+#
+# The recurring form embeds this command in a scheduled prompt. A prompt
+# carrying absolute paths and an owner/repo cannot be shipped in a skill or
+# moved between checkouts, so both arguments have to default.
+
+CASE="--repo defaults to the repo gh resolves"
+setup
+export FAKE_GH_REPO="acme/widgets"
+pr 70 "Needs review" olga | jq -s . > "$FAKE_GH_DIR/requested.json"
+OUT="$("$SCAN" --state "$STATE" --once 2>"$SANDBOX/stderr")"
+RC=$?
+assert_eq "rc" 0 "$RC"
+assert_eq "scanned without --repo" "candidates" "$(jqout .status)"
+teardown
+
+CASE="--state defaults to .claude/gh-watch-reviews.local.json at the repo root"
+setup
+REPO_ROOT="$SANDBOX/repo"; mkdir -p "$REPO_ROOT/.claude" "$REPO_ROOT/deep/nested"
+git -C "$REPO_ROOT" init -q 2>/dev/null
+STATE="$REPO_ROOT/.claude/gh-watch-reviews.local.json"; write_state '{}'
+pr 71 "Needs review" olga | jq -s . > "$FAKE_GH_DIR/requested.json"
+OUT="$(cd "$REPO_ROOT/deep/nested" && "$SCAN" --repo o/r --once 2>"$SANDBOX/stderr")"
+assert_eq "found the state file from a subdirectory" "candidates" "$(echo "$OUT" | jq -r .status)"
+teardown
+
+CASE="no arguments at all beyond --once"
+setup
+REPO_ROOT="$SANDBOX/repo"; mkdir -p "$REPO_ROOT/.claude"
+git -C "$REPO_ROOT" init -q 2>/dev/null
+STATE="$REPO_ROOT/.claude/gh-watch-reviews.local.json"; write_state '{}'
+OUT="$(cd "$REPO_ROOT" && "$SCAN" --once 2>"$SANDBOX/stderr")"
+assert_eq "status" "empty" "$(echo "$OUT" | jq -r .status)"
+assert_eq "line names the resolved repo" "yes" "$(echo "$OUT" | jq -r 'if (.line | test("o/r")) then "yes" else "no" end')"
+teardown
+
+CASE="an unresolvable repo is an error naming the flag, and says whether retrying helps"
+setup
+export FAKE_GH_REPOVIEW_EXIT=1
+OUT="$("$SCAN" --state "$STATE" --once 2>"$SANDBOX/stderr")"
+RC=$?
+assert_eq "rc" 1 "$RC"
+assert_eq "message points at --repo" "yes" "$(echo "$OUT" | jq -r 'if (.message | test("--repo")) then "yes" else "no" end')"
+assert_eq "not worth retrying" "false" "$(echo "$OUT" | jq -r .retryable)"
+teardown
+
+CASE="a repo lookup that fails on the network IS worth retrying"
+setup
+export FAKE_GH_REPOVIEW_EXIT=1 FAKE_GH_REPOVIEW_STDERR="error connecting to api.github.com"
+OUT="$("$SCAN" --state "$STATE" --once 2>"$SANDBOX/stderr")"
+assert_eq "retryable" "true" "$(echo "$OUT" | jq -r .retryable)"
 teardown
 
 # ---------- summary ----------

@@ -199,8 +199,17 @@ if [ "$STATUS_ONLY" = 1 ]; then
 fi
 
 command -v gh >/dev/null 2>&1 || fail "gh not found"
-[ -n "$REPO" ] || fail "--repo is required"
-[ -n "$STATE_FILE" ] || fail "--state is required"
+
+# Both of these default, so a caller that just wants "scan this repo" writes
+# `scan.sh --once` and nothing else. That matters beyond convenience: the
+# recurring form embeds this command in a scheduled prompt, and a prompt
+# carrying absolute paths and an owner/repo is machine-specific — it cannot be
+# shipped in a skill, reviewed, or moved between checkouts.
+# Anchored to the repository root rather than the working directory, so it
+# resolves the same from a subdirectory.
+if [ -z "$STATE_FILE" ]; then
+  STATE_FILE="$(git rev-parse --show-toplevel 2>/dev/null || echo .)/.claude/gh-watch-reviews.local.json"
+fi
 
 # The auth gate must not become a network gate: right after a wake, `gh auth
 # status` fails because it cannot reach github.com, which says nothing about the
@@ -208,6 +217,19 @@ command -v gh >/dev/null 2>&1 || fail "gh not found"
 # through to the scan, which has its own retry policy.
 if ! gh_capture auth status; then
   is_transient "$GH_ERR" || fail "gh is not authenticated — run: gh auth login"
+fi
+
+# Resolved after the auth gate, since it is itself an API call. A failure here
+# gets the same transient/terminal split as any other: unreachable now is worth
+# another tick, "not a repository" is not.
+if [ -z "$REPO" ]; then
+  if gh_capture repo view --json nameWithOwner -q .nameWithOwner && [ -n "$GH_OUT" ]; then
+    REPO="$GH_OUT"
+  else
+    scan_fail "could not resolve the repo — pass --repo owner/name"
+    echo "$SCAN_RESULT"
+    exit 1
+  fi
 fi
 
 ADHOC_EXCLUDES_JSON="$(printf '%s\n' "${ADHOC_EXCLUDES[@]:-}" | jq -R . | jq -s 'map(select(length > 0))')"
