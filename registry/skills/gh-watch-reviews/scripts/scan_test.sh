@@ -517,6 +517,15 @@ assert_eq "status" "watch_dead" "$(jqout .status)"
 assert_eq "ran_for_seconds" "0" "$(jqout .ran_for_seconds)"
 teardown
 
+CASE="a pidfile from before poll stamping reports unknown, not zero"
+setup
+PIDFILE="$SANDBOX/watch.pid"
+jq -n '{pid: 999999, repo: "o/r", interval: 900, armed_at: "2026-07-30 12:00:00 +04"}' > "$PIDFILE"
+OUT="$(status_of)"
+assert_eq "status" "watch_dead" "$(jqout .status)"
+assert_eq "ran_for_seconds" "null" "$(jqout .ran_for_seconds)"
+teardown
+
 CASE="a deliberately removed pidfile is never resurrected by a later poll"
 setup
 PIDFILE="$SANDBOX/watch.pid"

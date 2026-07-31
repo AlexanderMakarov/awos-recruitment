@@ -127,8 +127,12 @@ if [ "$STATUS_ONLY" = 1 ]; then
   # the difference between "killed while healthy" (re-arm it) and "died on
   # startup" (something is broken — stop and say so), so it is computed here
   # rather than left to date arithmetic at the call site.
-  STATUS_JQ='. + {ran_for_seconds: (if (.last_poll_epoch and .armed_at_epoch)
-                                    then (.last_poll_epoch - .armed_at_epoch) else 0 end)}'
+  # null, not 0, when the pidfile predates poll stamping: "I cannot tell" and
+  # "died before its first poll" call for opposite responses, and a pidfile
+  # written by an older version must not be read as a crash-on-startup.
+  STATUS_JQ='. + {ran_for_seconds: (if (.armed_at_epoch | not) then null
+                                    elif (.last_poll_epoch | not) then 0
+                                    else (.last_poll_epoch - .armed_at_epoch) end)}'
   if [ -n "$WPID" ] && kill -0 "$WPID" 2>/dev/null \
      && ps -o command= -p "$WPID" 2>/dev/null | grep -q 'scan\.sh'; then
     jq "$STATUS_JQ"' + {status: "watch_running"}' "$PIDFILE" 2>/dev/null \
