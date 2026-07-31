@@ -119,7 +119,7 @@ Intent cannot be inferred from drifted code. If the anti-pattern IS the majority
 1. **Scan the package.** Identify the dominant pattern and the best-shaped file.
 2. **Draft the section.** Candidate golden example, 2–4 do/don't rules, suspected drift files.
 3. **Present the draft as a proposal.** Ask the human to confirm or correct — especially the golden example choice, the drift callouts, and any suspected deliberate deviations (which become Exception lines only if the human confirms them).
-4. **Only confirmed content lands.** If no human is available, mark the section heading `# Design Intent (unconfirmed proposal)` and swap in the unconfirmed preamble (see The conflict preamble) — never present inferred intent as confirmed.
+4. **Only confirmed content lands.** If no human is available, mark the section heading `# Design Intent (unconfirmed proposal)` and swap in the unconfirmed preamble (see The conflict preamble) — never present inferred intent as confirmed. This fallback is for proposing a new section only: never rewrite, downgrade, or delete an existing confirmed section — including its Exception lines — without a human; propose changes in your summary or PR description instead.
 
 ## Maintenance
 
