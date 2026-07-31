@@ -49,7 +49,13 @@
 #                                                  (an in_progress entry has held the in-flight lock longer than
 #                                                   --stale-hours / config.stale_review_hours / 2 — needs the user; watch exit 4)
 #   {"status":"expired","checked_at":"..."}        (watch TTL, exit 3)
-#   {"status":"error","message":"..."}             (exit 1)
+#   {"status":"error","message":"...","retryable":true|false}   (exit 1)
+#            retryable = the network or GitHub was briefly unreachable. Watch
+#            mode retries those in place (--max-transient, default 3 consecutive
+#            polls) rather than exiting, because the scan due right after the
+#            machine wakes routinely beats Wi-Fi coming back, and dying there
+#            leaves the watch off until a human notices. Failures that need the
+#            user — auth, a bad state file — still exit on the first one.
 #   {"status":"watch_running"|"watch_dead"|"watch_absent",...}  (--status only)
 #
 # Exit codes: 0 candidates found (or any --once/--status outcome), 1 error,
@@ -59,7 +65,49 @@ set -u
 REPO="" STATE_FILE="" ONCE=0 STATUS_ONLY=0 INTERVAL=900 TTL=0 POLL_STEP=30
 LOG_FILE="" PIDFILE="" OWN_PIDFILE=0 STALE_HOURS=""
 DEFAULT_STALE_HOURS=2
+MAX_TRANSIENT=3
 ADHOC_EXCLUDES=() ADHOC_DRAFTS=false
+GH_OUT="" GH_ERR="" SCAN_MESSAGE="" SCAN_RETRYABLE=false
+
+# Run gh, keeping stderr: whether a failure is worth retrying is only knowable
+# from what gh printed there, and the difference decides whether a watch keeps
+# going or stops for the user.
+gh_capture() {
+  local err_file rc
+  err_file="$(mktemp)" || { GH_OUT=""; GH_ERR="could not create a temp file"; return 1; }
+  GH_OUT="$(gh "$@" 2>"$err_file")"; rc=$?
+  GH_ERR="$(cat "$err_file" 2>/dev/null)"
+  rm -f "$err_file"
+  return $rc
+}
+
+# Transient = the network or GitHub was briefly unavailable, and the identical
+# call will likely work next poll. The case that matters most in practice: the
+# machine just woke and the first scan runs before Wi-Fi is back. Anything not
+# listed here — auth above all — is treated as needing the user, because a watch
+# that retries a bad token forever is a watch that never tells anyone.
+is_transient() {
+  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+    *"error connecting to"*|*"could not resolve host"*|*"no such host"*|\
+    *"connection refused"*|*"connection reset"*|*"network is unreachable"*|\
+    *"i/o timeout"*|*"timeout awaiting"*|*"tls handshake timeout"*|\
+    *"temporary failure in name resolution"*|*"eof"*|\
+    *"rate limit"*|*"502 bad gateway"*|*"503 service"*|*"504 gateway"*|\
+    *"server error"*) return 0 ;;
+  esac
+  return 1
+}
+
+# A failure inside a scan: recorded rather than fatal, so watch mode can decide
+# between retrying and giving up. Callers must `return 1` right after.
+scan_fail() {
+  SCAN_STATUS="error"
+  SCAN_MESSAGE="$1"
+  if is_transient "$GH_ERR"; then SCAN_RETRYABLE=true; else SCAN_RETRYABLE=false; fi
+  [ -n "$GH_ERR" ] && SCAN_MESSAGE="$1 ($(printf '%s' "$GH_ERR" | tr '\n' ' ' | cut -c1-160))"
+  SCAN_RESULT="$(jq -n --arg m "$SCAN_MESSAGE" --argjson r "$SCAN_RETRYABLE" \
+    '{status: "error", message: $m, retryable: $r}')"
+}
 
 # Remove the pidfile — only ever called on an exit this script chose. Anything
 # that kills the watcher without running this leaves the file behind on purpose.
@@ -88,9 +136,12 @@ stamp_pidfile() {
   fi
 }
 
+# Terminal failure: bad arguments, unusable state file, auth. Always
+# retryable:false — the field is never absent, so a caller can branch on it
+# without having to guess what a missing one meant.
 fail() {
   release_pidfile
-  jq -n --arg m "$1" '{status: "error", message: $m}'
+  jq -n --arg m "$1" '{status: "error", message: $m, retryable: false}'
   exit 1
 }
 
@@ -104,6 +155,7 @@ while [ $# -gt 0 ]; do
     --ttl) TTL="$2"; shift 2 ;;
     --poll-step) POLL_STEP="$2"; shift 2 ;;
     --stale-hours) STALE_HOURS="$2"; shift 2 ;;
+    --max-transient) MAX_TRANSIENT="$2"; shift 2 ;;
     --log) LOG_FILE="$2"; shift 2 ;;
     --pidfile) PIDFILE="$2"; shift 2 ;;
     --exclude) ADHOC_EXCLUDES+=("$2"); shift 2 ;;
@@ -148,7 +200,13 @@ command -v gh >/dev/null 2>&1 || fail "gh not found"
 [ -n "$REPO" ] || fail "--repo is required"
 [ -n "$STATE_FILE" ] || fail "--state is required"
 
-gh auth status >/dev/null 2>&1 || fail "gh is not authenticated — run: gh auth login"
+# The auth gate must not become a network gate: right after a wake, `gh auth
+# status` fails because it cannot reach github.com, which says nothing about the
+# token. Only a genuine auth failure stops us here; a transient one falls
+# through to the scan, which has its own retry policy.
+if ! gh_capture auth status; then
+  is_transient "$GH_ERR" || fail "gh is not authenticated — run: gh auth login"
+fi
 
 ADHOC_EXCLUDES_JSON="$(printf '%s\n' "${ADHOC_EXCLUDES[@]:-}" | jq -R . | jq -s 'map(select(length > 0))')"
 
@@ -160,6 +218,7 @@ JSON_FIELDS="number,title,author,url,isDraft,createdAt"
 # SCAN_RESULT to the final result JSON. Any failure inside prints an error
 # result and exits 1 — a watch must never turn a failure into a quiet poll.
 scan() {
+  SCAN_STATUS="" SCAN_MESSAGE="" SCAN_RETRYABLE=false GH_ERR=""
   [ -f "$STATE_FILE" ] || fail "state file not found: $STATE_FILE (run the skill once to create it)"
   jq -e 'has("config") and has("state")' "$STATE_FILE" >/dev/null 2>&1 \
     || fail "state file is not valid gh-watch-reviews JSON: $STATE_FILE"
@@ -194,14 +253,16 @@ scan() {
 
   if [ "$(echo "$guard" | jq 'length')" -gt 0 ]; then
     if [ -z "${VIEWER:-}" ]; then
-      VIEWER="$(gh api user -q .login)" || fail "could not resolve the gh viewer login"
+      gh_capture api user -q .login || { scan_fail "could not resolve the gh viewer login"; return 1; }
+      VIEWER="$GH_OUT"
     fi
     local entry n at pr resolution tmp
     while IFS= read -r entry; do
       n="$(echo "$entry" | jq -r '.number')"
       at="$(echo "$entry" | jq -r '.at')"
-      pr="$(gh pr view "$n" --repo "$REPO" --json state,reviews)" \
-        || fail "in-progress check failed for PR #$n"
+      gh_capture pr view "$n" --repo "$REPO" --json state,reviews \
+        || { scan_fail "in-progress check failed for PR #$n"; return 1; }
+      pr="$GH_OUT"
       resolution="$(echo "$pr" | jq -r --arg login "$VIEWER" --arg at "$at" '
         if .state != "OPEN" then "prune"
         elif ([.reviews[] | select(.author.login == $login
@@ -250,18 +311,20 @@ scan() {
   fi
 
   local requested unrequested
-  requested="$(gh search prs --review-requested=@me --state open --repo "$REPO" \
-    --json "$JSON_FIELDS" --limit 50)" \
-    || fail "review-requested search failed"
+  gh_capture search prs --review-requested=@me --state open --repo "$REPO" \
+    --json "$JSON_FIELDS" --limit 50 \
+    || { scan_fail "review-requested search failed"; return 1; }
+  requested="$GH_OUT"
   echo "$requested" | jq -e 'type == "array"' >/dev/null 2>&1 \
-    || fail "review-requested search returned non-JSON output"
+    || { GH_ERR=""; scan_fail "review-requested search returned non-JSON output"; return 1; }
 
   if jq -e '.config.watch_unrequested' "$STATE_FILE" >/dev/null; then
-    unrequested="$(gh search prs --state open --repo "$REPO" \
-      --json "$JSON_FIELDS" --limit 50 -- -reviewed-by:@me -author:@me)" \
-      || fail "unreviewed-PRs search failed"
+    gh_capture search prs --state open --repo "$REPO" \
+      --json "$JSON_FIELDS" --limit 50 -- -reviewed-by:@me -author:@me \
+      || { scan_fail "unreviewed-PRs search failed"; return 1; }
+    unrequested="$GH_OUT"
     echo "$unrequested" | jq -e 'type == "array"' >/dev/null 2>&1 \
-      || fail "unreviewed-PRs search returned non-JSON output"
+      || { GH_ERR=""; scan_fail "unreviewed-PRs search returned non-JSON output"; return 1; }
   else
     unrequested="[]"
   fi
@@ -306,8 +369,9 @@ scan() {
     while IFS= read -r check; do
       n="$(echo "$check" | jq -r '.number')"
       sha="$(echo "$check" | jq -r '.sha')"
-      head="$(gh pr view "$n" --repo "$REPO" --json headRefOid | jq -r '.headRefOid')" \
-        || fail "head fetch failed for PR #$n"
+      gh_capture pr view "$n" --repo "$REPO" --json headRefOid \
+        || { scan_fail "head fetch failed for PR #$n"; return 1; }
+      head="$(echo "$GH_OUT" | jq -r '.headRefOid')"
       if [ "$head" != "$sha" ]; then
         candidates="$(echo "$candidates" | jq --argjson c "$check" \
           '. + [$c | del(.sha) | .why = "new commits since your last decision"]')"
@@ -329,6 +393,10 @@ if [ "$ONCE" = 1 ]; then
   scan
   case "$SCAN_STATUS" in
     candidates | stale_in_progress) echo "$SCAN_RESULT" ;;
+    # One pass has no next poll to retry on, so an error is still an error —
+    # but it carries `retryable` so the caller knows whether re-running is
+    # worth anything or a human has to act.
+    error) echo "$SCAN_RESULT"; exit 1 ;;
     in_review) jq -n --arg t "$(now)" '{status: "in_review", checked_at: $t}' ;;
     *) jq -n --arg t "$(now)" '{status: "empty", checked_at: $t}' ;;
   esac
@@ -381,6 +449,7 @@ if [ -n "$PIDFILE" ]; then
 fi
 log_line "watch armed · every ${INTERVAL}s · pid $$ · $(now)"
 
+TRANSIENT_STREAK=0
 while :; do
   check_orphaned
   scan
@@ -395,11 +464,32 @@ while :; do
       echo "$SCAN_RESULT"
       exit 4
       ;;
+    error)
+      # A watch outlives the conditions it was armed under. The common failure
+      # is not a broken setup but a few unreachable seconds — most often the
+      # first scan after the machine wakes, before Wi-Fi is back — and exiting
+      # for that means the watch stays dead until a human notices. Retry those,
+      # loudly in the log so a failing check is never mistaken for a quiet one,
+      # and give up only once it is clearly not a blip. Everything else (auth
+      # above all) still exits immediately: it needs the user, not patience.
+      if [ "$SCAN_RETRYABLE" = true ] && [ "$TRANSIENT_STREAK" -lt "$((MAX_TRANSIENT - 1))" ]; then
+        TRANSIENT_STREAK=$((TRANSIENT_STREAK + 1))
+        log_line "check failed, retrying ($TRANSIENT_STREAK/$MAX_TRANSIENT) — $SCAN_MESSAGE · $(now)"
+        wait_for_next_scan
+        continue
+      fi
+      release_pidfile
+      log_line "check failed — giving up after $((TRANSIENT_STREAK + 1)) attempt(s) — $SCAN_MESSAGE · $(now)"
+      echo "$SCAN_RESULT"
+      exit 1
+      ;;
     in_review)
+      TRANSIENT_STREAK=0
       stamp_pidfile
       log_line "review in progress — watching paused · checked $(now)"
       ;;
     *)
+      TRANSIENT_STREAK=0
       stamp_pidfile
       log_line "no PRs need your review · checked $(now)"
       ;;

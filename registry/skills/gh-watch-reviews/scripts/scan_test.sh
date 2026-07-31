@@ -25,10 +25,28 @@ setup() {
 args="$*"
 case "$args" in
   *"auth status"*)
-    exit "${FAKE_GH_AUTH_EXIT:-0}"
+    if [ "${FAKE_GH_AUTH_EXIT:-0}" != 0 ]; then
+      echo "${FAKE_GH_AUTH_STDERR:-You are not logged into any GitHub hosts. To log in, run: gh auth login}" >&2
+      exit "$FAKE_GH_AUTH_EXIT"
+    fi
+    exit 0
     ;;
   *"--review-requested=@me"*)
-    if [ -n "${FAKE_GH_REQUESTED_EXIT:-}" ]; then exit "$FAKE_GH_REQUESTED_EXIT"; fi
+    # A shared flag file lets a test make gh fail for the first N calls only,
+    # which is how a transient outage actually behaves.
+    if [ -n "${FAKE_GH_FAIL_UNTIL:-}" ] && [ -f "$FAKE_GH_FAIL_UNTIL" ]; then
+      n=$(cat "$FAKE_GH_FAIL_UNTIL" 2>/dev/null || echo 0)
+      if [ "$n" -gt 0 ]; then
+        echo $((n - 1)) > "$FAKE_GH_FAIL_UNTIL"
+        echo "error connecting to api.github.com" >&2
+        echo "check your internet connection or https://githubstatus.com" >&2
+        exit 1
+      fi
+    fi
+    if [ -n "${FAKE_GH_REQUESTED_EXIT:-}" ]; then
+      echo "${FAKE_GH_REQUESTED_STDERR:-error connecting to api.github.com}" >&2
+      exit "$FAKE_GH_REQUESTED_EXIT"
+    fi
     cat "$FAKE_GH_DIR/requested.json" 2>/dev/null || echo "[]"
     ;;
   *"search prs"*)
@@ -65,7 +83,8 @@ FAKE
 
 teardown() {
   rm -rf "$SANDBOX"
-  unset FAKE_GH_AUTH_EXIT FAKE_GH_REQUESTED_EXIT FAKE_GH_UNREQUESTED_EXIT 2>/dev/null || true
+  unset FAKE_GH_AUTH_EXIT FAKE_GH_AUTH_STDERR FAKE_GH_REQUESTED_EXIT \
+        FAKE_GH_REQUESTED_STDERR FAKE_GH_UNREQUESTED_EXIT FAKE_GH_FAIL_UNTIL 2>/dev/null || true
 }
 
 # write_state '<state-object-json>' [config-overrides-json]
@@ -354,6 +373,18 @@ rm "$STATE"
 run_once
 assert_eq "rc" 1 "$RC"
 assert_eq "status" "error" "$(jqout .status)"
+assert_eq "terminal errors say so explicitly" "false" "$(jqout .retryable)"
+teardown
+
+CASE="every error carries retryable — a caller never has to guess a missing field"
+setup
+rm "$STATE"
+run_once
+assert_eq "missing state file" "false" "$(jqout .retryable)"
+teardown
+setup
+OUT="$("$SCAN" --repo o/r --state "$STATE" --once --bogus-flag 2>/dev/null)"
+assert_eq "unknown argument" "false" "$(echo "$OUT" | jq -r .retryable)"
 teardown
 
 CASE="watch mode: quiet polls heartbeat to log, exits 3 on ttl"
@@ -399,6 +430,68 @@ OUT="$("$SCAN" --repo o/r --state "$STATE" --interval 1 --ttl 30 --log "$LOG" 2>
 RC=$?
 assert_eq "rc" 1 "$RC"
 assert_eq "status" "error" "$(jqout .status)"
+teardown
+
+# ---------- transient failures vs failures that need the user ----------
+#
+# The watch is armed once and then has to outlive whatever the machine does.
+# The failure that actually happens is a wake-up: the overdue scan fires before
+# Wi-Fi is back, gh cannot reach github.com, and treating that like a broken
+# setup leaves the watch dead until a human notices.
+
+CASE="watch mode: a transient network failure is retried, not fatal"
+setup
+FAIL_FLAG="$SANDBOX/fail-until"; echo 2 > "$FAIL_FLAG"; export FAKE_GH_FAIL_UNTIL="$FAIL_FLAG"
+OUT="$("$SCAN" --repo o/r --state "$STATE" --interval 1 --poll-step 1 --ttl 12 --log "$LOG" 2>"$SANDBOX/stderr")"
+RC=$?
+assert_eq "survived the outage and reached its TTL" 3 "$RC"
+assert_eq "logged the failures" "yes" "$(grep -q "check failed, retrying" "$LOG" && echo yes || echo no)"
+assert_eq "recovered once the network came back" "yes" "$(grep -q "no PRs need your review" "$LOG" && echo yes || echo no)"
+assert_eq "never reported a failed check as quiet" "yes" \
+  "$([ "$(grep -c 'no PRs need your review' "$LOG")" -gt 0 ] && [ "$(head -3 "$LOG" | grep -c 'check failed')" -gt 0 ] && echo yes || echo no)"
+teardown
+
+CASE="watch mode: a transient failure that never clears still gives up and exits 1"
+setup
+FAIL_FLAG="$SANDBOX/fail-until"; echo 999 > "$FAIL_FLAG"; export FAKE_GH_FAIL_UNTIL="$FAIL_FLAG"
+OUT="$("$SCAN" --repo o/r --state "$STATE" --interval 1 --poll-step 1 --max-transient 2 --log "$LOG" 2>"$SANDBOX/stderr")"
+RC=$?
+assert_eq "rc" 1 "$RC"
+assert_eq "status" "error" "$(jqout .status)"
+assert_eq "flagged retryable" "true" "$(jqout .retryable)"
+assert_eq "said it gave up" "yes" "$(grep -q "giving up" "$LOG" && echo yes || echo no)"
+assert_eq "pidfile released on the real exit" "no" "$([ -f "$SANDBOX/none.pid" ] && echo yes || echo no)"
+teardown
+
+CASE="watch mode: an auth failure exits at once — retrying a bad token helps nobody"
+setup
+export FAKE_GH_AUTH_EXIT=1
+START=$(date +%s)
+OUT="$("$SCAN" --repo o/r --state "$STATE" --interval 60 --poll-step 1 --log "$LOG" 2>"$SANDBOX/stderr")"
+RC=$?
+assert_eq "rc" 1 "$RC"
+assert_eq "did not retry" "yes" "$([ $(( $(date +%s) - START )) -lt 10 ] && echo yes || echo no)"
+assert_eq "message mentions auth" "yes" "$(echo "$OUT" | jq -r 'if (.message | test("auth")) then "yes" else "no" end')"
+teardown
+
+CASE="an auth check that fails only because the network is down is not an auth error"
+setup
+export FAKE_GH_AUTH_EXIT=1 FAKE_GH_AUTH_STDERR="error connecting to api.github.com"
+run_once
+assert_eq "not reported as an auth problem" "no" \
+  "$(echo "$OUT" | jq -r 'if (.message // "" | test("not authenticated")) then "yes" else "no" end')"
+teardown
+
+CASE="--once reports whether an error is worth retrying"
+setup
+export FAKE_GH_REQUESTED_EXIT=1 FAKE_GH_REQUESTED_STDERR="error connecting to api.github.com"
+run_once
+assert_eq "rc" 1 "$RC"
+assert_eq "retryable" "true" "$(jqout .retryable)"
+unset FAKE_GH_REQUESTED_STDERR
+export FAKE_GH_REQUESTED_EXIT=1 FAKE_GH_REQUESTED_STDERR="HTTP 401: Bad credentials"
+run_once
+assert_eq "auth error is not retryable" "false" "$(jqout .retryable)"
 teardown
 
 # ---------- how long a review may hold the in-flight lock ----------
