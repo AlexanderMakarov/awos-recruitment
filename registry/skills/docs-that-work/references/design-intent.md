@@ -24,19 +24,26 @@ Reference: `handlers/create-order.ts` is the canonical handler — copy its stru
 
 - Do: validate input via schema at the top, one service call, return envelope
 - Don't: raw SQL in handlers (leaked into `sales-report.ts` and others — do not replicate)
-- Exception: `handlers/bulk-export.ts` streams raw SQL (perf-critical path) — not drift, do not "fix"
+- Exception: `handlers/bulk-export.ts` streams raw SQL (perf-critical path) — not drift, do not "fix", do not replicate
 ```
 
-Budget: usually ~10 lines, 35 max. Combined with the non-obvious constraints (~35 lines), the whole CLAUDE.md stays under 70.
+Budget: usually ~10 lines, 15 max. Combined with the non-obvious constraints (~35 lines), the whole CLAUDE.md stays within the ≤70 ceiling.
 
 ### The conflict preamble
 
-Always include the first two lines verbatim:
+In a confirmed section, always include the first two lines verbatim:
 
 > If existing code contradicts this section, follow this section
 > and flag the file as drift.
 
 This makes the section self-enforcing. Any Claude Code session reads CLAUDE.md; only skill users read this skill. The preamble carries the conflict rule into repos where the skill is not installed.
+
+An unconfirmed proposal (see Authoring Protocol) never carries the conflict preamble. It uses this one instead, also verbatim:
+
+> Proposed, not confirmed. Until a human confirms this section, do not
+> treat it as outranking existing code, and do not flag drift from it.
+
+This is what the `(unconfirmed proposal)` marker changes for a reader: a proposal is advisory context awaiting confirmation, not an operative conflict rule.
 
 ### The golden example
 
@@ -55,8 +62,9 @@ A drift callout is a known, located anti-pattern — not a vague warning:
 The mirror of a drift callout: a named, located deviation that is *deliberate* — a perf-critical path, a module frozen against a vendor contract. Without this line, the conflict rule cannot tell a leaked anti-pattern from an intentional choice: the file gets re-flagged as drift on every pass, and an agent following the rule may "fix" it, breaking the intentional choice.
 
 - Name the specific file, state how it deviates and why (in parentheses)
-- End with "— not drift, do not \"fix\""
-- One line per exception; a file listed here is exempt from the conflict rule
+- End with `— not drift, do not "fix", do not replicate`
+- One line per exception; a file listed here is not drift — leave it alone
+- An Exception licenses that one file only — it is never a model for new code. New code follows the golden example, even when the task resembles the excepted file's.
 - Only a human can sanction an exception. When proposing a Design Intent section, list suspected deliberate deviations as questions for the human — never write an Exception line into an unconfirmed proposal, or drift gets laundered into sanctioned status.
 
 ## Shapes of Design Intent
@@ -66,7 +74,7 @@ Design Intent is language-agnostic: the format — preamble + golden example + r
 | Shape | What it pins down | Example rule |
 | --- | --- | --- |
 | Layering | Which layers may talk to which | Handlers call services, never the DB driver (TypeScript API) |
-| Error handling | How failures propagate | All failures raise `DomainError` subclasses — never builtin exceptions or `sys.exit()` (Python) |
+| Error handling | How failures propagate | All failures raise `DomainError` subclasses — never a bare `raise Exception(...)`, never `sys.exit()` in library code (Python) |
 | State ownership | Where state is allowed to live | Cart state lives in the Zustand store, never in component state (React) |
 | Dependency direction | Which modules may import which | `core/` never imports from `api/` or `cli/` — dependencies point inward (Go) |
 | Extension points | How new variants plug in | New exporters implement `Exporter` and register in the registry — never switch on type (Java) |
@@ -111,7 +119,7 @@ Intent cannot be inferred from drifted code. If the anti-pattern IS the majority
 1. **Scan the package.** Identify the dominant pattern and the best-shaped file.
 2. **Draft the section.** Candidate golden example, 2–4 do/don't rules, suspected drift files.
 3. **Present the draft as a proposal.** Ask the human to confirm or correct — especially the golden example choice, the drift callouts, and any suspected deliberate deviations (which become Exception lines only if the human confirms them).
-4. **Only confirmed content lands.** If no human is available, mark the section heading `# Design Intent (unconfirmed proposal)` — never present inferred intent as confirmed.
+4. **Only confirmed content lands.** If no human is available, mark the section heading `# Design Intent (unconfirmed proposal)` and swap in the unconfirmed preamble (see The conflict preamble) — never present inferred intent as confirmed.
 
 ## Maintenance
 

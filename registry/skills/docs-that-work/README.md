@@ -11,7 +11,7 @@ npx @provectusinc/awos-recruitment skill docs-that-work
 ## What This Skill Teaches
 
 - **The discoverability rule** — never document what code already reveals
-- **CLAUDE.md discipline** — non-obvious context and Design Intent only, target <70 lines
+- **CLAUDE.md discipline** — non-obvious context ~35 lines, plus a ~10-line Design Intent section where useful; 70 lines is the ceiling, not a target
 - **Design Intent sections** — document the intended shape of a package so agents stop multiplying leaked anti-patterns; intent outranks existing code
 - **README.md structure** — executable setup steps, not prose
 - **Grey box documentation** — describe interfaces, not internals

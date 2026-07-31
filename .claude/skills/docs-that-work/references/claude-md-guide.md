@@ -54,7 +54,7 @@ Reference: `[canonical file]` — copy its structure.
 
 - Do: [pattern rule new code must follow]
 - Don't: [anti-pattern] (leaked into `[file]` — do not replicate)
-- Exception: `[file]` [how it deviates] ([why it's deliberate]) — not drift, do not "fix"
+- Exception: `[file]` [how it deviates] ([why it's deliberate]) — not drift, do not "fix", do not replicate
 ```
 
 The Exception line is optional — include it only for files that deviate from the intent on purpose (human-confirmed). See `design-intent.md` in this directory.
