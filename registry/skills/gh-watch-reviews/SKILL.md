@@ -21,11 +21,12 @@ All discovery, filtering, and dedup logic is deterministic and lives in `scripts
 `args` — one of:
 
 - empty → one pass over the repo of the current working directory (`gh repo view --json nameWithOwner -q .nameWithOwner`)
+- `loop [interval]` → set up the recurring tick (see Recurring mode). **This is the recommended recurring form.**
 - `watch [interval]` → arm the background watcher (see Watch mode). `interval` accepts `30s`/`10m`/`1h` and overrides `config.poll_interval_minutes` for this invocation only; with no argument the configured value is used (15m if the config predates the setting)
 - `reconfigure` → re-run the config interview (references/setup.md), keep `state` untouched, then do a normal pass
 - ad-hoc overrides, applied to this invocation only: `exclude: <login>[, <login>…]` → `--exclude <login>` per login; `include-drafts` → `--include-drafts`
 
-The recurring form is `watch`: quiet polling happens in a background script and costs the session nothing. A `/loop` body runs the same single pass but re-injects this skill every tick — if this invocation IS a recurring `/loop` tick, complete the pass normally and, once per session, add one line suggesting `/gh-watch-reviews watch` instead.
+The recurring form is `loop` (Recurring mode). If this invocation IS a `/loop` tick whose body re-injects this whole file — the expensive shape — complete the pass normally and, once per session, say so in one line and give the thin body from Recurring mode as the replacement.
 
 ## One pass
 
@@ -51,9 +52,28 @@ bash "<skill-base-dir>/scripts/scan.sh" --repo <owner/repo> --state .claude/gh-w
 - `empty` → end the turn with exactly ONE compact heartbeat line and nothing else, using the returned `checked_at` verbatim (never invent, round, or approximate a timestamp): `gh-watch-reviews: owner/repo · no PRs need your review · checked <checked_at>`. This single line IS the entire quiet-tick deliverable — no second line, no summary of what was checked.
 - `candidates` → read references/candidates.md and process them as it directs.
 
+## Recurring mode
+
+The cheap way to keep watching. Run step 1 of "One pass" to resolve the repo, then invoke the `loop` skill with **this body verbatim** — substituting the real skill base directory, `owner/repo`, and the interval (`config.poll_interval_minutes` minutes, or the one given in args):
+
+```
+Skill(skill="loop", args="15m Run this and nothing else: bash <skill-base-dir>/scripts/scan.sh --repo <owner/repo> --state .claude/gh-watch-reviews.local.json --once
+Then: if the JSON has a \"line\", reply with exactly that line and nothing else. If \"status\" is \"candidates\" or \"stale_in_progress\", invoke the gh-watch-reviews skill and follow it. Otherwise reply nothing.")
+```
+
+Then say in one line what is being watched and how often, and stop.
+
+Why the body is shaped like that, so nobody "improves" it into something expensive:
+
+- **The scanner returns `line`, ready to print.** A quiet tick is one Bash call and one echo — nothing for you to compose, and no timestamp to round, reformat or invent.
+- **This file is not part of the tick.** It loads only when a tick actually has work (`candidates` / `stale_in_progress`). Re-injecting it every tick is what made the old `/loop /gh-watch-reviews` form cost ~4.4k tokens a tick; this one measures ~950.
+- **A failed check needs no special handling.** The tick reports it and the next tick retries — which is why this form is immune to the failure that repeatedly killed the background watcher (an overdue scan firing before Wi-Fi is back after the machine wakes).
+
+Its one limit: the schedule is in-memory and belongs to the session that created it, so closing Claude Code ends it and it has to be set up again. Nothing polls while no session is running — which is also true of `watch`, and costs nothing real, since no review can happen then either.
+
 ## Watch mode
 
-`watch` replaces in-context polling: the same scanner runs as a background loop and only ends its silence when there is something to do.
+`watch` runs the same scanner as a background loop, which polls without involving the session at all. Prefer Recurring mode unless you specifically want that: this harness kills long-running background commands after about 30 minutes, so a watcher has to be re-armed roughly twice an hour, and each re-arm costs more context (~3.7k tokens, measured) than the ~950 a loop tick costs. Watch only comes out ahead when the poll interval is well under half the kill window — at 5-minute polls it is six polls per re-arm, at 15 it is two, at 30 it is none.
 
 1. Run step 1 above. If `--status` reported `watch_running`, say so and stop — never arm a second one.
 2. Launch the scanner with `run_in_background` (no `--once`):

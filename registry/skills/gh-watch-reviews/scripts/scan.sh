@@ -106,7 +106,8 @@ scan_fail() {
   if is_transient "$GH_ERR"; then SCAN_RETRYABLE=true; else SCAN_RETRYABLE=false; fi
   [ -n "$GH_ERR" ] && SCAN_MESSAGE="$1 ($(printf '%s' "$GH_ERR" | tr '\n' ' ' | cut -c1-160))"
   SCAN_RESULT="$(jq -n --arg m "$SCAN_MESSAGE" --argjson r "$SCAN_RETRYABLE" \
-    '{status: "error", message: $m, retryable: $r}')"
+    '{status: "error", message: $m, retryable: $r,
+      line: ("gh-watch-reviews: search failed — " + $m)}')"
 }
 
 # Remove the pidfile — only ever called on an exit this script chose. Anything
@@ -141,7 +142,8 @@ stamp_pidfile() {
 # without having to guess what a missing one meant.
 fail() {
   release_pidfile
-  jq -n --arg m "$1" '{status: "error", message: $m, retryable: false}'
+  jq -n --arg m "$1" '{status: "error", message: $m, retryable: false,
+                       line: ("gh-watch-reviews: search failed — " + $m)}'
   exit 1
 }
 
@@ -397,8 +399,14 @@ if [ "$ONCE" = 1 ]; then
     # but it carries `retryable` so the caller knows whether re-running is
     # worth anything or a human has to act.
     error) echo "$SCAN_RESULT"; exit 1 ;;
+    # `line` is the exact text the caller should print, or absent when the
+    # caller should say nothing. It exists so a recurring caller (a /loop tick)
+    # is one Bash call and one echo — with no timestamp for a model to round,
+    # reformat or invent, which is the one thing a heartbeat must never do.
     in_review) jq -n --arg t "$(now)" '{status: "in_review", checked_at: $t}' ;;
-    *) jq -n --arg t "$(now)" '{status: "empty", checked_at: $t}' ;;
+    *) jq -n --arg t "$(now)" --arg r "$REPO" \
+         '{status: "empty", checked_at: $t,
+           line: ("gh-watch-reviews: " + $r + " · no PRs need your review · checked " + $t)}' ;;
   esac
   exit 0
 fi

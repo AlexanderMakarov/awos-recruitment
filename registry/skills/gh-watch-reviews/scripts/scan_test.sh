@@ -707,6 +707,42 @@ assert_eq "scanned again after the jump" "yes" "$([ "$AFTER" -gt "$BEFORE" ] && 
 unset SKEW_FILE
 teardown
 
+# ---------- `line`: the exact text a recurring caller prints ----------
+
+CASE="empty scan hands back a ready-to-print heartbeat line"
+setup
+run_once
+assert_eq "line matches the heartbeat format verbatim" "gh-watch-reviews: o/r · no PRs need your review · checked $(jqout .checked_at)" "$(jqout .line)"
+teardown
+
+CASE="in_review hands back no line — a paused tick says nothing"
+setup
+write_state "{\"16\": {\"sha\": \"aaa\", \"decision\": \"in_progress\", \"via\": \"requested\", \"at\": \"$(date -u +%FT%TZ)\"}}"
+run_once
+assert_eq "status" "in_review" "$(jqout .status)"
+assert_eq "no line" "null" "$(jqout .line)"
+teardown
+
+CASE="candidates hand back no line — the skill takes over, not a one-liner"
+setup
+pr 60 "Needs review" olga | jq -s . > "$FAKE_GH_DIR/requested.json"
+run_once
+assert_eq "status" "candidates" "$(jqout .status)"
+assert_eq "no line" "null" "$(jqout .line)"
+teardown
+
+CASE="errors hand back a printable line too"
+setup
+export FAKE_GH_REQUESTED_EXIT=1
+run_once
+assert_eq "line present" "yes" "$(echo "$OUT" | jq -r 'if (.line | startswith("gh-watch-reviews: search failed")) then "yes" else "no" end')"
+teardown
+setup
+rm "$STATE"
+run_once
+assert_eq "terminal errors too" "yes" "$(echo "$OUT" | jq -r 'if (.line | length) > 20 then "yes" else "no" end')"
+teardown
+
 # ---------- summary ----------
 
 echo
