@@ -403,8 +403,12 @@ teardown
 
 # ---------- how long a review may hold the in-flight lock ----------
 
-# An entry this old is 90 min in — inside the 2h default, outside a 1h setting.
+# Ages are always computed from now — never a literal date, which silently
+# drifts across a threshold as the calendar moves and turns a passing test into
+# a failing one overnight.
+# 90 min in: inside the 2h default, outside a 1h setting.
 at_90min_ago() { jq -rn --argjson t "$(( $(date -u +%s) - 5400 ))" '$t | todate'; }
+at_days_ago() { jq -rn --argjson t "$(( $(date -u +%s) - ($1 * 86400) ))" '$t | todate'; }
 
 CASE="stale threshold defaults to 2h when config says nothing"
 setup
@@ -424,10 +428,10 @@ teardown
 
 CASE="config.stale_review_hours lengthens the threshold"
 setup
-write_state '{"22": {"sha": "aaa", "decision": "in_progress", "via": "requested", "at": "2026-07-01T00:00:00Z"}}' '{"stale_review_hours": 720}'
+write_state "{\"22\": {\"sha\": \"aaa\", \"decision\": \"in_progress\", \"via\": \"requested\", \"at\": \"$(at_days_ago 10)\"}}" '{"stale_review_hours": 720}'
 echo '{"state": "OPEN", "reviews": []}' > "$FAKE_GH_DIR/reviews-22.json"
 run_once
-assert_eq "ancient entry still inside a 30-day window" "in_review" "$(jqout .status)"
+assert_eq "10-day-old entry still inside a 30-day window" "in_review" "$(jqout .status)"
 teardown
 
 CASE="fractional hours accepted (0.5h = 30min)"
@@ -485,6 +489,43 @@ OUT="$(status_of)"
 assert_eq "status" "watch_running" "$(jqout .status)"
 assert_eq "pid" "$WPID" "$(jqout .pid)"
 assert_eq "armed line logged" "yes" "$(grep -q "watch armed" "$LOG" && echo yes || echo no)"
+kill "$WPID" 2>/dev/null; wait "$WPID" 2>/dev/null
+teardown
+
+CASE="--status reports how long a watcher ran, so a kill can be told from a failure to start"
+setup
+PIDFILE="$SANDBOX/watch.pid"
+"$SCAN" --repo o/r --state "$STATE" --interval 1 --poll-step 1 --log "$LOG" --pidfile "$PIDFILE" >/dev/null 2>&1 &
+WPID=$!
+sleep 1
+OUT="$(status_of)"
+assert_eq "fresh watcher has not run long" "yes" "$([ "$(jqout .ran_for_seconds)" -lt 3 ] && echo yes || echo no)"
+sleep 4
+kill -TERM "$WPID" 2>/dev/null; wait "$WPID" 2>/dev/null
+OUT="$(status_of)"
+assert_eq "dead watcher still reports its run length" "yes" "$([ "$(jqout .ran_for_seconds)" -ge 3 ] && echo yes || echo no)"
+assert_eq "status" "watch_dead" "$(jqout .status)"
+teardown
+
+CASE="a watcher killed before its first poll reports ran_for_seconds 0"
+setup
+PIDFILE="$SANDBOX/watch.pid"
+jq -n --argjson p 999999 --argjson e "$(date +%s)" \
+  '{pid: $p, repo: "o/r", interval: 900, armed_at: "2026-07-30 12:00:00 +04", armed_at_epoch: $e}' > "$PIDFILE"
+OUT="$(status_of)"
+assert_eq "status" "watch_dead" "$(jqout .status)"
+assert_eq "ran_for_seconds" "0" "$(jqout .ran_for_seconds)"
+teardown
+
+CASE="a deliberately removed pidfile is never resurrected by a later poll"
+setup
+PIDFILE="$SANDBOX/watch.pid"
+"$SCAN" --repo o/r --state "$STATE" --interval 1 --poll-step 1 --log "$LOG" --pidfile "$PIDFILE" >/dev/null 2>&1 &
+WPID=$!
+sleep 2
+rm -f "$PIDFILE"
+sleep 3
+assert_eq "still gone after further polls" "no" "$([ -f "$PIDFILE" ] && echo yes || echo no)"
 kill "$WPID" 2>/dev/null; wait "$WPID" 2>/dev/null
 teardown
 

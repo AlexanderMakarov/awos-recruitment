@@ -36,6 +36,11 @@
 # took the terminal with it, a UI stop — which is what tells the skill to
 # re-arm. No pidfile means no watch is meant to be running.
 #
+# Each completed poll stamps last_poll_at/last_poll_epoch into it, so --status
+# can report ran_for_seconds: a watcher killed after polling happily for an hour
+# and one that fell over on startup both end as "watch_dead", but only the
+# second means anything is wrong.
+#
 # stdout is always a single JSON object:
 #   {"status":"candidates","checked_at":"...","candidates":[{number,title,author,url,createdAt,why}]}
 #   {"status":"empty","checked_at":"..."}          (--once only)
@@ -62,6 +67,25 @@ release_pidfile() {
   [ "$OWN_PIDFILE" = 1 ] || return 0
   rm -f "$PIDFILE"
   OWN_PIDFILE=0
+}
+
+# Stamp the last completed poll into the pidfile. This is what lets a later
+# --status say how long a watcher that is now dead actually ran for: armed_at
+# alone can't distinguish "polled happily for an hour, then something killed it"
+# from "died seconds after arming", and those need opposite responses.
+# Never recreates a removed pidfile — a deliberate stop deletes it, and this
+# must not race that away.
+stamp_pidfile() {
+  [ "$OWN_PIDFILE" = 1 ] || return 0
+  [ -f "$PIDFILE" ] || return 0
+  local tmp
+  tmp="$(mktemp)" || return 0
+  if jq --argjson e "$(date +%s)" --arg t "$(now)" \
+      '. + {last_poll_at: $t, last_poll_epoch: $e}' "$PIDFILE" > "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
+    mv "$tmp" "$PIDFILE" 2>/dev/null || rm -f "$tmp"
+  else
+    rm -f "$tmp"
+  fi
 }
 
 fail() {
@@ -99,13 +123,19 @@ if [ "$STATUS_ONLY" = 1 ]; then
   WPID="$(jq -r '.pid // empty' "$PIDFILE" 2>/dev/null)" || WPID=""
   # A pid alone is not proof: pids get reused, so confirm it is still this
   # script before believing the watch is up.
+  # ran_for_seconds: armed_at → last completed poll. For a dead watcher this is
+  # the difference between "killed while healthy" (re-arm it) and "died on
+  # startup" (something is broken — stop and say so), so it is computed here
+  # rather than left to date arithmetic at the call site.
+  STATUS_JQ='. + {ran_for_seconds: (if (.last_poll_epoch and .armed_at_epoch)
+                                    then (.last_poll_epoch - .armed_at_epoch) else 0 end)}'
   if [ -n "$WPID" ] && kill -0 "$WPID" 2>/dev/null \
      && ps -o command= -p "$WPID" 2>/dev/null | grep -q 'scan\.sh'; then
-    jq '. + {status: "watch_running"}' "$PIDFILE" 2>/dev/null \
-      || jq -n --argjson p "$WPID" '{status: "watch_running", pid: $p}'
+    jq "$STATUS_JQ"' + {status: "watch_running"}' "$PIDFILE" 2>/dev/null \
+      || jq -n --argjson p "$WPID" '{status: "watch_running", pid: $p, ran_for_seconds: 0}'
   else
-    jq '. + {status: "watch_dead"}' "$PIDFILE" 2>/dev/null \
-      || jq -n '{status: "watch_dead"}'
+    jq "$STATUS_JQ"' + {status: "watch_dead"}' "$PIDFILE" 2>/dev/null \
+      || jq -n '{status: "watch_dead", ran_for_seconds: 0}'
   fi
   exit 0
 fi
@@ -340,7 +370,8 @@ wait_for_next_scan() {
 START=$(date +%s)
 if [ -n "$PIDFILE" ]; then
   jq -n --argjson p "$$" --arg r "$REPO" --argjson i "$INTERVAL" --arg t "$(now)" \
-    '{pid: $p, repo: $r, interval: $i, armed_at: $t}' > "$PIDFILE" \
+    --argjson e "$(date +%s)" \
+    '{pid: $p, repo: $r, interval: $i, armed_at: $t, armed_at_epoch: $e}' > "$PIDFILE" \
     || fail "could not write the pidfile: $PIDFILE"
   OWN_PIDFILE=1
 fi
@@ -361,9 +392,11 @@ while :; do
       exit 4
       ;;
     in_review)
+      stamp_pidfile
       log_line "review in progress — watching paused · checked $(now)"
       ;;
     *)
+      stamp_pidfile
       log_line "no PRs need your review · checked $(now)"
       ;;
   esac
