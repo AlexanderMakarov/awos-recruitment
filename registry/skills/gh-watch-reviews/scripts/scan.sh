@@ -11,67 +11,41 @@
 # PR prunes it. This is what lets reviews run in separate sessions that never
 # touch this state file.
 #
-# Modes:
-#   --once   one scan; prints a result JSON and exits.
-#   --status report whether the watcher named by --pidfile is still running.
-#   (default) watch loop: rescan every --interval seconds until candidates
-#            appear (exit 0) or an error occurs (exit 1). Runs indefinitely;
-#            each poll checks for orphaning (PPID 1 — the launching session
-#            died) and exits silently, so no zombie keeps polling GitHub.
-#            An explicit --ttl N makes it exit 3 after N seconds instead
-#            (used by tests; default 0 = no TTL). Quiet polls append a
-#            heartbeat line to --log.
-#
-# The wait between polls is a wall-clock deadline walked in --poll-step chunks,
-# not one long sleep. Two reasons: the orphan check then runs every step instead
-# of once per interval, and macOS does not count time spent asleep towards
-# sleep(1), so a single `sleep $INTERVAL` would leave the watcher silent for a
-# further full interval after the machine wakes. Comparing `date +%s` against
-# the deadline makes a wake-up scan immediately.
-#
-# --pidfile is how a watch outlives the Claude Code process that armed it: the
-# file is written at launch and removed only on the watcher's OWN exit paths
-# (candidates, error, TTL, orphan). A pidfile whose pid is gone therefore means
-# "armed, then killed from outside" — a session restart, a machine sleep that
-# took the terminal with it, a UI stop — which is what tells the skill to
-# re-arm. No pidfile means no watch is meant to be running.
-#
-# Each completed poll stamps last_poll_at/last_poll_epoch into it, so --status
-# can report ran_for_seconds: a watcher killed after polling happily for an hour
-# and one that fell over on startup both end as "watch_dead", but only the
-# second means anything is wrong.
+# One scan per invocation (--once). Recurring use is a scheduled tick that runs
+# this again — see the skill's Recurring mode — not a long-lived loop here: this
+# harness kills background commands after ~30 minutes, so a loop inside the
+# script has to be resurrected about twice an hour, which costs more than it
+# saves and is a failure mode of its own.
 #
 # stdout is always a single JSON object:
 #   {"status":"candidates","checked_at":"...","candidates":[{number,title,author,url,createdAt,why}]}
-#   {"status":"empty","checked_at":"..."}          (--once only)
-#   {"status":"in_review","checked_at":"..."}      (--once only: a review is in progress — the tick is a no-op)
+#   {"status":"empty","checked_at":"...","line":"..."}
+#   {"status":"in_review","checked_at":"..."}      (a review is in progress — the tick is a no-op, and says nothing)
 #   {"status":"stale_in_progress","held_for_over_hours":N,"prs":[...]}
 #                                                  (an in_progress entry has held the in-flight lock longer than
-#                                                   --stale-hours / config.stale_review_hours / 2 — needs the user; watch exit 4)
-#   {"status":"expired","checked_at":"..."}        (watch TTL, exit 3)
+#                                                   --stale-hours / config.stale_review_hours / 2 — needs the user)
 #   {"status":"error","message":"...","retryable":true|false}   (exit 1)
-#            retryable = the network or GitHub was briefly unreachable. Watch
-#            mode retries those in place (--max-transient, default 3 consecutive
-#            polls) rather than exiting, because the scan due right after the
-#            machine wakes routinely beats Wi-Fi coming back, and dying there
-#            leaves the watch off until a human notices. Failures that need the
-#            user — auth, a bad state file — still exit on the first one.
-#   {"status":"watch_running"|"watch_dead"|"watch_absent",...}  (--status only)
+#            retryable = the network or GitHub was briefly unreachable, so the
+#            next scheduled tick is worth running. The case that matters: the
+#            scan due right after the machine wakes routinely beats Wi-Fi coming
+#            back. Failures that need the user — auth, a bad state file — are
+#            retryable:false and the caller should stop rather than re-run.
 #
-# Exit codes: 0 candidates found (or any --once/--status outcome), 1 error,
-#             3 watch TTL expired, 4 stale in_progress entry (watch mode).
+# `line` is the exact text the caller should print, absent when it should print
+# nothing. It exists so a recurring tick is one call and one echo, with no
+# timestamp for a model to round, reformat or invent.
+#
+# Exit codes: 0 any successful outcome, 1 error.
 set -u
 
-REPO="" STATE_FILE="" ONCE=0 STATUS_ONLY=0 INTERVAL=900 TTL=0 POLL_STEP=30
-LOG_FILE="" PIDFILE="" OWN_PIDFILE=0 STALE_HOURS=""
+REPO="" STATE_FILE="" STALE_HOURS=""
 DEFAULT_STALE_HOURS=2
-MAX_TRANSIENT=3
 ADHOC_EXCLUDES=() ADHOC_DRAFTS=false
 GH_OUT="" GH_ERR="" SCAN_MESSAGE="" SCAN_RETRYABLE=false
 
 # Run gh, keeping stderr: whether a failure is worth retrying is only knowable
-# from what gh printed there, and the difference decides whether a watch keeps
-# going or stops for the user.
+# from what gh printed there, and that difference decides whether the caller
+# runs again or stops for the user.
 gh_capture() {
   local err_file rc
   err_file="$(mktemp)" || { GH_OUT=""; GH_ERR="could not create a temp file"; return 1; }
@@ -82,10 +56,10 @@ gh_capture() {
 }
 
 # Transient = the network or GitHub was briefly unavailable, and the identical
-# call will likely work next poll. The case that matters most in practice: the
+# call will likely work next tick. The case that matters most in practice: the
 # machine just woke and the first scan runs before Wi-Fi is back. Anything not
-# listed here — auth above all — is treated as needing the user, because a watch
-# that retries a bad token forever is a watch that never tells anyone.
+# listed here — auth above all — is treated as needing the user, because a check
+# that retries a bad token forever is a check that never tells anyone.
 is_transient() {
   case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
     *"error connecting to"*|*"could not resolve host"*|*"no such host"*|\
@@ -98,8 +72,8 @@ is_transient() {
   return 1
 }
 
-# A failure inside a scan: recorded rather than fatal, so watch mode can decide
-# between retrying and giving up. Callers must `return 1` right after.
+# A failure inside a scan: recorded with its classification so the caller can
+# tell "try again next tick" from "stop". Callers must `return 1` right after.
 scan_fail() {
   SCAN_STATUS="error"
   SCAN_MESSAGE="$1"
@@ -110,38 +84,10 @@ scan_fail() {
       line: ("gh-watch-reviews: search failed — " + $m)}')"
 }
 
-# Remove the pidfile — only ever called on an exit this script chose. Anything
-# that kills the watcher without running this leaves the file behind on purpose.
-release_pidfile() {
-  [ "$OWN_PIDFILE" = 1 ] || return 0
-  rm -f "$PIDFILE"
-  OWN_PIDFILE=0
-}
-
-# Stamp the last completed poll into the pidfile. This is what lets a later
-# --status say how long a watcher that is now dead actually ran for: armed_at
-# alone can't distinguish "polled happily for an hour, then something killed it"
-# from "died seconds after arming", and those need opposite responses.
-# Never recreates a removed pidfile — a deliberate stop deletes it, and this
-# must not race that away.
-stamp_pidfile() {
-  [ "$OWN_PIDFILE" = 1 ] || return 0
-  [ -f "$PIDFILE" ] || return 0
-  local tmp
-  tmp="$(mktemp)" || return 0
-  if jq --argjson e "$(date +%s)" --arg t "$(now)" \
-      '. + {last_poll_at: $t, last_poll_epoch: $e}' "$PIDFILE" > "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
-    mv "$tmp" "$PIDFILE" 2>/dev/null || rm -f "$tmp"
-  else
-    rm -f "$tmp"
-  fi
-}
-
 # Terminal failure: bad arguments, unusable state file, auth. Always
 # retryable:false — the field is never absent, so a caller can branch on it
 # without having to guess what a missing one meant.
 fail() {
-  release_pidfile
   jq -n --arg m "$1" '{status: "error", message: $m, retryable: false,
                        line: ("gh-watch-reviews: search failed — " + $m)}'
   exit 1
@@ -151,15 +97,8 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --repo) REPO="$2"; shift 2 ;;
     --state) STATE_FILE="$2"; shift 2 ;;
-    --once) ONCE=1; shift ;;
-    --status) STATUS_ONLY=1; shift ;;
-    --interval) INTERVAL="$2"; shift 2 ;;
-    --ttl) TTL="$2"; shift 2 ;;
-    --poll-step) POLL_STEP="$2"; shift 2 ;;
+    --once) shift ;;  # the only mode; accepted so the documented command reads clearly
     --stale-hours) STALE_HOURS="$2"; shift 2 ;;
-    --max-transient) MAX_TRANSIENT="$2"; shift 2 ;;
-    --log) LOG_FILE="$2"; shift 2 ;;
-    --pidfile) PIDFILE="$2"; shift 2 ;;
     --exclude) ADHOC_EXCLUDES+=("$2"); shift 2 ;;
     --include-drafts) ADHOC_DRAFTS=true; shift ;;
     *) fail "unknown argument: $1" ;;
@@ -167,36 +106,6 @@ while [ $# -gt 0 ]; do
 done
 
 command -v jq >/dev/null 2>&1 || { echo '{"status":"error","message":"jq not found"}'; exit 1; }
-
-# --status answers one question — is the armed watcher still alive? — and needs
-# neither gh nor the state file, so it runs before their checks. It must stay
-# cheap: the skill calls it on a first pass just to notice a watch that died.
-if [ "$STATUS_ONLY" = 1 ]; then
-  [ -n "$PIDFILE" ] || fail "--status requires --pidfile"
-  [ -f "$PIDFILE" ] || { jq -n '{status: "watch_absent"}'; exit 0; }
-  WPID="$(jq -r '.pid // empty' "$PIDFILE" 2>/dev/null)" || WPID=""
-  # A pid alone is not proof: pids get reused, so confirm it is still this
-  # script before believing the watch is up.
-  # ran_for_seconds: armed_at → last completed poll. For a dead watcher this is
-  # the difference between "killed while healthy" (re-arm it) and "died on
-  # startup" (something is broken — stop and say so), so it is computed here
-  # rather than left to date arithmetic at the call site.
-  # null, not 0, when the pidfile predates poll stamping: "I cannot tell" and
-  # "died before its first poll" call for opposite responses, and a pidfile
-  # written by an older version must not be read as a crash-on-startup.
-  STATUS_JQ='. + {ran_for_seconds: (if (.armed_at_epoch | not) then null
-                                    elif (.last_poll_epoch | not) then 0
-                                    else (.last_poll_epoch - .armed_at_epoch) end)}'
-  if [ -n "$WPID" ] && kill -0 "$WPID" 2>/dev/null \
-     && ps -o command= -p "$WPID" 2>/dev/null | grep -q 'scan\.sh'; then
-    jq "$STATUS_JQ"' + {status: "watch_running"}' "$PIDFILE" 2>/dev/null \
-      || jq -n --argjson p "$WPID" '{status: "watch_running", pid: $p, ran_for_seconds: 0}'
-  else
-    jq "$STATUS_JQ"' + {status: "watch_dead"}' "$PIDFILE" 2>/dev/null \
-      || jq -n '{status: "watch_dead", ran_for_seconds: 0}'
-  fi
-  exit 0
-fi
 
 command -v gh >/dev/null 2>&1 || fail "gh not found"
 
@@ -239,8 +148,8 @@ now() { date '+%F %T %Z'; }
 JSON_FIELDS="number,title,author,url,isDraft,createdAt"
 
 # One scan. Sets SCAN_STATUS to "candidates" or "empty"; on "candidates" sets
-# SCAN_RESULT to the final result JSON. Any failure inside prints an error
-# result and exits 1 — a watch must never turn a failure into a quiet poll.
+# SCAN_RESULT to the final result JSON. Any failure inside becomes an error
+# result — a failed check must never be reported as a quiet one.
 scan() {
   SCAN_STATUS="" SCAN_MESSAGE="" SCAN_RETRYABLE=false GH_ERR=""
   [ -f "$STATE_FILE" ] || fail "state file not found: $STATE_FILE (run the skill once to create it)"
@@ -249,7 +158,7 @@ scan() {
 
   # How long a review may hold the in-flight lock before the user is asked about
   # it: --stale-hours wins, else config.stale_review_hours, else the default.
-  # Re-read per scan so an edit to the config takes effect without a re-arm.
+  # Re-read per scan, so editing the config takes effect on the next tick.
   local stale_hours stale_seconds
   stale_hours="$STALE_HOURS"
   if [ -z "$stale_hours" ]; then
@@ -413,116 +322,20 @@ scan() {
   fi
 }
 
-if [ "$ONCE" = 1 ]; then
-  scan
-  case "$SCAN_STATUS" in
-    candidates | stale_in_progress) echo "$SCAN_RESULT" ;;
-    # One pass has no next poll to retry on, so an error is still an error —
-    # but it carries `retryable` so the caller knows whether re-running is
-    # worth anything or a human has to act.
-    error) echo "$SCAN_RESULT"; exit 1 ;;
-    # `line` is the exact text the caller should print, or absent when the
-    # caller should say nothing. It exists so a recurring caller (a /loop tick)
-    # is one Bash call and one echo — with no timestamp for a model to round,
-    # reformat or invent, which is the one thing a heartbeat must never do.
-    in_review) jq -n --arg t "$(now)" '{status: "in_review", checked_at: $t}' ;;
-    *) jq -n --arg t "$(now)" --arg r "$REPO" \
+scan
+case "$SCAN_STATUS" in
+  candidates | stale_in_progress) echo "$SCAN_RESULT" ;;
+  # One pass has no next poll to retry on, so an error is still an error —
+  # but it carries `retryable` so the caller knows whether re-running is
+  # worth anything or a human has to act.
+  error) echo "$SCAN_RESULT"; exit 1 ;;
+  # `line` is the exact text the caller should print, or absent when the
+  # caller should say nothing. It exists so a recurring caller (a /loop tick)
+  # is one Bash call and one echo — with no timestamp for a model to round,
+  # reformat or invent, which is the one thing a heartbeat must never do.
+  in_review) jq -n --arg t "$(now)" '{status: "in_review", checked_at: $t}' ;;
+  *) jq -n --arg t "$(now)" --arg r "$REPO" \
          '{status: "empty", checked_at: $t,
            line: ("gh-watch-reviews: " + $r + " · no PRs need your review · checked " + $t)}' ;;
-  esac
-  exit 0
-fi
-
-# Watch loop.
-log_line() { [ -n "$LOG_FILE" ] && echo "gh-watch-reviews: $REPO · $1" >> "$LOG_FILE"; }
-
-# The launching session is gone (we were reparented to init): stop polling.
-# This only fires when the watcher outlives its parent — a Claude Code process
-# that is torn down normally takes its children with it, which is why the
-# pidfile, not this check, is what makes a dead watch noticeable afterwards.
-check_orphaned() {
-  [ "$(ps -o ppid= -p $$ | tr -d ' ')" = "1" ] || return 0
-  log_line "session gone — watcher exiting · $(now)"
-  release_pidfile
-  exit 0
-}
-
-check_ttl() {
-  [ "$TTL" -gt 0 ] || return 0
-  [ $(( $(date +%s) - START )) -ge "$TTL" ] || return 0
-  release_pidfile
-  jq -n --arg t "$(now)" '{status: "expired", checked_at: $t}'
-  exit 3
-}
-
-# Wait until the next scan is due, in POLL_STEP chunks, against a wall-clock
-# deadline: see the --poll-step note in the header.
-wait_for_next_scan() {
-  local due remaining
-  due=$(( $(date +%s) + INTERVAL ))
-  while :; do
-    remaining=$(( due - $(date +%s) ))
-    [ "$remaining" -le 0 ] && return 0
-    check_ttl
-    check_orphaned
-    if [ "$remaining" -lt "$POLL_STEP" ]; then sleep "$remaining"; else sleep "$POLL_STEP"; fi
-  done
-}
-
-START=$(date +%s)
-if [ -n "$PIDFILE" ]; then
-  jq -n --argjson p "$$" --arg r "$REPO" --argjson i "$INTERVAL" --arg t "$(now)" \
-    --argjson e "$(date +%s)" \
-    '{pid: $p, repo: $r, interval: $i, armed_at: $t, armed_at_epoch: $e}' > "$PIDFILE" \
-    || fail "could not write the pidfile: $PIDFILE"
-  OWN_PIDFILE=1
-fi
-log_line "watch armed · every ${INTERVAL}s · pid $$ · $(now)"
-
-TRANSIENT_STREAK=0
-while :; do
-  check_orphaned
-  scan
-  case "$SCAN_STATUS" in
-    candidates)
-      release_pidfile
-      echo "$SCAN_RESULT"
-      exit 0
-      ;;
-    stale_in_progress)
-      release_pidfile
-      echo "$SCAN_RESULT"
-      exit 4
-      ;;
-    error)
-      # A watch outlives the conditions it was armed under. The common failure
-      # is not a broken setup but a few unreachable seconds — most often the
-      # first scan after the machine wakes, before Wi-Fi is back — and exiting
-      # for that means the watch stays dead until a human notices. Retry those,
-      # loudly in the log so a failing check is never mistaken for a quiet one,
-      # and give up only once it is clearly not a blip. Everything else (auth
-      # above all) still exits immediately: it needs the user, not patience.
-      if [ "$SCAN_RETRYABLE" = true ] && [ "$TRANSIENT_STREAK" -lt "$((MAX_TRANSIENT - 1))" ]; then
-        TRANSIENT_STREAK=$((TRANSIENT_STREAK + 1))
-        log_line "check failed, retrying ($TRANSIENT_STREAK/$MAX_TRANSIENT) — $SCAN_MESSAGE · $(now)"
-        wait_for_next_scan
-        continue
-      fi
-      release_pidfile
-      log_line "check failed — giving up after $((TRANSIENT_STREAK + 1)) attempt(s) — $SCAN_MESSAGE · $(now)"
-      echo "$SCAN_RESULT"
-      exit 1
-      ;;
-    in_review)
-      TRANSIENT_STREAK=0
-      stamp_pidfile
-      log_line "review in progress — watching paused · checked $(now)"
-      ;;
-    *)
-      TRANSIENT_STREAK=0
-      stamp_pidfile
-      log_line "no PRs need your review · checked $(now)"
-      ;;
-  esac
-  wait_for_next_scan
-done
+esac
+exit 0
