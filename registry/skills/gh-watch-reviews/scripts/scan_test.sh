@@ -544,6 +544,91 @@ OUT="$("$SCAN" --state "$STATE" --once 2>"$SANDBOX/stderr")"
 assert_eq "retryable" "true" "$(echo "$OUT" | jq -r .retryable)"
 teardown
 
+# ---------- the check marker: noticing a recurring check that stopped ----------
+#
+# The schedule lives in Claude Code's memory and dies with the session, leaving
+# nothing behind. Without a marker, a check that stopped overnight is
+# indistinguishable from one that was never set up — and its silence reads as
+# "no PRs need your review", which is the failure this skill exists to prevent.
+
+CASE="a repo with no check marker never mentions one"
+setup
+run_once
+assert_eq "status" "empty" "$(jqout .status)"
+assert_eq "no check_stale field" "null" "$(jqout .check_stale)"
+teardown
+
+CASE="--mark-armed records the check, --mark-stopped clears it"
+setup
+OUT="$("$SCAN" --state "$STATE" --mark-armed 15 2>"$SANDBOX/stderr")"
+assert_eq "status" "check_armed" "$(jqout .status)"
+assert_eq "interval persisted" "15" "$(jq -r '.check.interval_minutes' "$STATE")"
+assert_eq "stamped on arming" "yes" "$(jq -r 'if (.check.last_check_epoch > 0) then "yes" else "no" end' "$STATE")"
+OUT="$("$SCAN" --state "$STATE" --mark-stopped 2>"$SANDBOX/stderr")"
+assert_eq "status" "check_cleared" "$(jqout .status)"
+assert_eq "marker gone" "null" "$(jq -r '.check // "null"' "$STATE")"
+teardown
+
+CASE="a check that ran recently is not reported stale"
+setup
+"$SCAN" --state "$STATE" --mark-armed 15 >/dev/null 2>&1
+run_once
+assert_eq "no nag" "null" "$(jqout .check_stale)"
+teardown
+
+CASE="a check silent for more than two intervals is reported stale, with its cadence"
+setup
+"$SCAN" --state "$STATE" --mark-armed 15 >/dev/null 2>&1
+# last ran 90 minutes ago — six intervals
+jq --argjson e "$(( $(date +%s) - 5400 ))" '.check.last_check_epoch = $e | .check.last_check_at = "2026-08-03 09:00:00 +04"' "$STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
+run_once
+assert_eq "stale reported" "true" "$(jqout .check_stale)"
+assert_eq "cadence reported" "15" "$(jqout .check_interval_minutes)"
+assert_eq "last run reported" "2026-08-03 09:00:00 +04" "$(jqout .check_last_at)"
+teardown
+
+CASE="one missed tick is not enough — a sleeping machine must not nag"
+setup
+"$SCAN" --state "$STATE" --mark-armed 15 >/dev/null 2>&1
+jq --argjson e "$(( $(date +%s) - 1200 ))" '.check.last_check_epoch = $e' "$STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
+run_once
+assert_eq "20 min silence is within the grace of 2 intervals" "null" "$(jqout .check_stale)"
+teardown
+
+CASE="every scan stamps the marker, so a running check never goes stale"
+setup
+"$SCAN" --state "$STATE" --mark-armed 15 >/dev/null 2>&1
+jq --argjson e "$(( $(date +%s) - 5400 ))" '.check.last_check_epoch = $e' "$STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
+run_once
+assert_eq "first scan reports stale" "true" "$(jqout .check_stale)"
+run_once
+assert_eq "second scan does not — the first stamped it" "null" "$(jqout .check_stale)"
+teardown
+
+CASE="staleness rides along with candidates and errors too, not just quiet passes"
+setup
+"$SCAN" --state "$STATE" --mark-armed 15 >/dev/null 2>&1
+jq --argjson e "$(( $(date +%s) - 5400 ))" '.check.last_check_epoch = $e' "$STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
+pr 80 "Needs review" olga | jq -s . > "$FAKE_GH_DIR/requested.json"
+run_once
+assert_eq "candidates carry it" "true" "$(jqout .check_stale)"
+teardown
+setup
+"$SCAN" --state "$STATE" --mark-armed 15 >/dev/null 2>&1
+jq --argjson e "$(( $(date +%s) - 5400 ))" '.check.last_check_epoch = $e' "$STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
+export FAKE_GH_REQUESTED_EXIT=1
+run_once
+assert_eq "errors carry it" "true" "$(jqout .check_stale)"
+teardown
+
+CASE="--mark-armed rejects a nonsense interval instead of storing it"
+setup
+OUT="$("$SCAN" --state "$STATE" --mark-armed soon 2>"$SANDBOX/stderr")"
+assert_eq "status" "error" "$(jqout .status)"
+OUT="$("$SCAN" --state "$STATE" --mark-armed 0 2>"$SANDBOX/stderr")"
+assert_eq "zero rejected" "error" "$(jqout .status)"
+teardown
+
 # ---------- summary ----------
 
 echo

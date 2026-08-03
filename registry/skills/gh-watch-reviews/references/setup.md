@@ -26,6 +26,8 @@ One file in the watched repo holds user config and machine-managed dedup state. 
 }
 ```
 
+A `check` block appears alongside `config` and `state` once a recurring check is set up (`--mark-armed`), and is removed when the user stops it (`--mark-stopped`). It records the cadence and when a scan last actually ran, which is the only way a later session can tell "the check stopped when that session closed" from "no check was ever set up" — the schedule itself lives in Claude Code's memory and leaves nothing behind. Machine-managed; never edit it by hand.
+
 `sha` is the PR's `headRefOid` at decision time. `decision` is one of `reviewed`, `skipped`, `in_progress`; `via` records which search surfaced the PR (`requested` = explicit review request, `unrequested` = never-reviewed sweep). `at` is UTC ISO-8601 — write it with `date -u +%FT%TZ`, never local time: the scanner's staleness math depends on it.
 
 `review_target` decides where a surfaced PR's review runs: `"ask"` — one question per candidate (here / new tab / skip / stop); `"here"` — always inline in the watch session, started without asking; `"new-tab"` — always a separate TUI session (references/review-target.md), launched without asking.

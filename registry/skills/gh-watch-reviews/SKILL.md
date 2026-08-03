@@ -44,6 +44,8 @@ bash "<skill-base-dir>/scripts/scan.sh" --once
 - `empty` → end the turn with exactly ONE compact heartbeat line and nothing else, using the returned `checked_at` verbatim (never invent, round, or approximate a timestamp): `gh-watch-reviews: owner/repo · no PRs need your review · checked <checked_at>`. This single line IS the entire quiet-tick deliverable — no second line, no summary of what was checked.
 - `candidates` → read references/candidates.md and process them as it directs.
 
+Independently of `status`, if the JSON carries **`check_stale: true`**, a recurring check was set up in this repo and has not run for more than twice its interval — almost always because the session that owned it was closed, since the schedule lives in memory and leaves nothing behind. Add exactly one line after whatever the status called for, quoting the returned values: `gh-watch-reviews: recurring check (every <check_interval_minutes>m) hasn't run since <check_last_at> — say "loop" to start it again`. It is the one case where a quiet pass gets a second line, because silence from a check that stopped is indistinguishable from silence meaning "nothing to review" — which is the failure this skill exists to prevent.
+
 ## Recurring mode
 
 The cheap way to keep watching. Run step 1 of "One pass" to resolve the repo, then invoke the `loop` skill with **this body verbatim** — substituting only the real skill base directory and the interval (`config.poll_interval_minutes` minutes, or the one given in args):
@@ -53,7 +55,13 @@ Skill(skill="loop", args="15m Run this and nothing else: bash <skill-base-dir>/s
 Then: if the JSON has a \"line\", reply with exactly that line and nothing else. If \"status\" is \"candidates\" or \"stale_in_progress\", invoke the gh-watch-reviews skill and follow it. Otherwise reply nothing.")
 ```
 
-Then say in one line what is being watched and how often, and stop.
+Then record that a check is meant to be running here — one Bash call — and say in one line what is being watched and how often:
+
+```bash
+bash "<skill-base-dir>/scripts/scan.sh" --mark-armed <interval in whole minutes>
+```
+
+Without it nothing survives the session: the schedule is in memory, so once this session closes, a check that stopped looks exactly like one that was never set up. Every scan stamps the marker, so a running check stays fresh by itself.
 
 Why the body is shaped like that, so nobody "improves" it into something expensive:
 

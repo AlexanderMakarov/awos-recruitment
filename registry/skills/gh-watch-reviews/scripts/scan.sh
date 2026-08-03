@@ -38,7 +38,7 @@
 # Exit codes: 0 any successful outcome, 1 error.
 set -u
 
-REPO="" STATE_FILE="" STALE_HOURS=""
+REPO="" STATE_FILE="" STALE_HOURS="" MARK_ARMED="" MARK_STOPPED=0
 DEFAULT_STALE_HOURS=2
 ADHOC_EXCLUDES=() ADHOC_DRAFTS=false
 GH_OUT="" GH_ERR="" SCAN_MESSAGE="" SCAN_RETRYABLE=false
@@ -99,6 +99,8 @@ while [ $# -gt 0 ]; do
     --state) STATE_FILE="$2"; shift 2 ;;
     --once) shift ;;  # the only mode; accepted so the documented command reads clearly
     --stale-hours) STALE_HOURS="$2"; shift 2 ;;
+    --mark-armed) MARK_ARMED="$2"; shift 2 ;;
+    --mark-stopped) MARK_STOPPED=1; shift ;;
     --exclude) ADHOC_EXCLUDES+=("$2"); shift 2 ;;
     --include-drafts) ADHOC_DRAFTS=true; shift ;;
     *) fail "unknown argument: $1" ;;
@@ -118,6 +120,41 @@ command -v gh >/dev/null 2>&1 || fail "gh not found"
 # resolves the same from a subdirectory.
 if [ -z "$STATE_FILE" ]; then
   STATE_FILE="$(git rev-parse --show-toplevel 2>/dev/null || echo .)/.claude/gh-watch-reviews.local.json"
+fi
+
+# Rewrite the state file through a temp file: the calling agent also does
+# Read → modify → Write on it, and a half-written state file is worse than a
+# stale one.
+write_state_file() {
+  local tmp
+  tmp="$(mktemp)" || return 1
+  if jq "$1" "$STATE_FILE" > "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
+    mv "$tmp" "$STATE_FILE" 2>/dev/null || { rm -f "$tmp"; return 1; }
+  else
+    rm -f "$tmp"; return 1
+  fi
+}
+
+# `check` records that a recurring check is *supposed* to be running here, and
+# when it last actually ran. The schedule itself lives in Claude Code's memory
+# and dies with the session, leaving nothing behind — so without this, a check
+# that stopped overnight looks exactly like one that was never set up, and the
+# silence reads as "no PRs need your review". Marked armed when the recurring
+# form is set up, cleared when the user stops it, stamped by every scan.
+if [ -n "$MARK_ARMED" ] || [ "$MARK_STOPPED" = 1 ]; then
+  [ -f "$STATE_FILE" ] || fail "state file not found: $STATE_FILE (run the skill once to create it)"
+  if [ "$MARK_STOPPED" = 1 ]; then
+    write_state_file 'del(.check)' || fail "could not clear the check marker in $STATE_FILE"
+    jq -n '{status: "check_cleared"}'
+  else
+    case "$MARK_ARMED" in ''|*[!0-9]*) fail "--mark-armed takes whole minutes, got: $MARK_ARMED" ;; esac
+    [ "$MARK_ARMED" -gt 0 ] || fail "--mark-armed must be greater than zero"
+    write_state_file "$(printf '.check = {interval_minutes: %s, armed_at: "%s", last_check_at: "%s", last_check_epoch: %s}' \
+        "$MARK_ARMED" "$(date '+%F %T %Z')" "$(date '+%F %T %Z')" "$(date +%s)")" \
+      || fail "could not write the check marker to $STATE_FILE"
+    jq -n --argjson m "$MARK_ARMED" '{status: "check_armed", interval_minutes: $m}'
+  fi
+  exit 0
 fi
 
 # The auth gate must not become a network gate: right after a wake, `gh auth
@@ -322,20 +359,39 @@ scan() {
   fi
 }
 
+# Was the recurring check still running? Judged before this run stamps itself,
+# against twice the interval — one missed tick is a sleeping machine, two is a
+# schedule that no longer exists. Only ever reported when a check was actually
+# set up here; a one-off pass must never nag about a check nobody asked for.
+CHECK_EXTRA='{}'
+if [ -f "$STATE_FILE" ] && jq -e 'has("check")' "$STATE_FILE" >/dev/null 2>&1; then
+  CHECK_EXTRA="$(jq --argjson now "$(date +%s)" '
+    .check as $c
+    | (($c.interval_minutes // 15) * 60 * 2) as $grace
+    | if (($now - ($c.last_check_epoch // 0)) > $grace)
+      then {check_stale: true, check_interval_minutes: ($c.interval_minutes // 15),
+            check_last_at: ($c.last_check_at // "never")}
+      else {} end' "$STATE_FILE" 2>/dev/null)" || CHECK_EXTRA='{}'
+  [ -n "$CHECK_EXTRA" ] || CHECK_EXTRA='{}'
+  write_state_file "$(printf '.check.last_check_at = "%s" | .check.last_check_epoch = %s' \
+      "$(date '+%F %T %Z')" "$(date +%s)")" || true
+fi
+
 scan
 case "$SCAN_STATUS" in
-  candidates | stale_in_progress) echo "$SCAN_RESULT" ;;
+  candidates | stale_in_progress) RESULT="$SCAN_RESULT" ;;
   # One pass has no next poll to retry on, so an error is still an error —
   # but it carries `retryable` so the caller knows whether re-running is
   # worth anything or a human has to act.
-  error) echo "$SCAN_RESULT"; exit 1 ;;
+  error) echo "$SCAN_RESULT" | jq --argjson e "$CHECK_EXTRA" '. + $e'; exit 1 ;;
   # `line` is the exact text the caller should print, or absent when the
   # caller should say nothing. It exists so a recurring caller (a /loop tick)
   # is one Bash call and one echo — with no timestamp for a model to round,
   # reformat or invent, which is the one thing a heartbeat must never do.
-  in_review) jq -n --arg t "$(now)" '{status: "in_review", checked_at: $t}' ;;
-  *) jq -n --arg t "$(now)" --arg r "$REPO" \
+  in_review) RESULT="$(jq -n --arg t "$(now)" '{status: "in_review", checked_at: $t}')" ;;
+  *) RESULT="$(jq -n --arg t "$(now)" --arg r "$REPO" \
          '{status: "empty", checked_at: $t,
-           line: ("gh-watch-reviews: " + $r + " · no PRs need your review · checked " + $t)}' ;;
+           line: ("gh-watch-reviews: " + $r + " · no PRs need your review · checked " + $t)}')" ;;
 esac
+echo "$RESULT" | jq --argjson e "$CHECK_EXTRA" '. + $e'
 exit 0

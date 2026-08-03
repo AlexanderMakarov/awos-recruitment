@@ -30,7 +30,11 @@ The auto modes never publish anything unattended — `pr-review`'s own gates sti
   2. Launch per references/review-target.md. If the launch itself fails (not the fallback — the fallback "launch" is printing the command), remove the entry and ask the user how to proceed.
   3. Move to the **next candidate immediately** — never wait for the external session. The scanner tracks its completion from GitHub (review-target.md § Completion tracking).
 - **Skip** (asked mode, or the user says so) → write `{sha, decision: "skipped", via, at: <date -u +%FT%TZ>}`; next candidate. (Sticky — see setup.md.)
-- **Stop watching** (asked mode, or the user says so) → stop processing, and tell the user how to end the recurring check: it is a `/loop`, so stopping the loop stops the checks. Nothing else needs cleaning up.
+- **Stop watching** (asked mode, or the user says so) → stop processing, tell the user how to end the recurring check itself (it is a `/loop`, so stopping the loop stops the checks), and clear the marker so no later pass reports the check as stopped-unexpectedly:
+
+  ```bash
+  bash "<skill-base-dir>/scripts/scan.sh" --mark-stopped
+  ```
 While you're writing state anyway, prune entries whose PRs are closed or merged.
 
 ## After the pass
