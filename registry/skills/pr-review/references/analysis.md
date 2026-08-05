@@ -32,6 +32,18 @@ The `pr-review-toolkit` plugin provides specialized review agents that go deeper
 
 Give each agent the context its dimension needs, not just the diff: `pr-test-analyzer` can't judge coverage gaps without the existing tests, and `comment-analyzer` needs the surrounding code to tell an outdated comment from a correct one. (These agents carry their own descriptions and system prompts — this skill selects them and feeds them scope; it doesn't re-prompt them.) Run the applicable agents in parallel. Each returns its own findings; treat them as high-signal for their dimension but still subject to the discipline below.
 
+## Collecting the engines' results
+
+Dispatching is the easy half. Getting the results back is where a review quietly loses half its wall-clock, so the mechanics are not optional.
+
+**Dispatch engines as ordinary subagents — never as named background agents.** An unnamed `Agent` call returns the agent's output as the tool result and the harness notifies you the moment it finishes. A *named* agent runs as a background teammate whose completion arrives as a teammate message instead, and that message can land long after the work is done. Measured on a real run: six engines were all idle within 8 minutes, their results were not collected for 28, and every completion notification arrived in one batch **after the review had already been posted**. Naming the agents is what broke it.
+
+**Never poll.** No `sleep` loops, no `until [ -s <file> ]; do sleep 30; done`, no watching a task's output file, no re-listing a directory to see if something appeared. The same run spent **31 of its 72 minutes** in 35 polling calls, 17 of which were killed by the 120-second command timeout — while waiting on results that already existed. If you find yourself writing a wait loop, the dispatch was wrong: fix the dispatch.
+
+**Never read agent transcripts to recover a result.** The `.jsonl` files under the session's `subagents/` directory are harness internals, not an API. Scraping them for "the last assistant message" is how you end up acting on a **partial** result — in the same run, one such scrape returned a 76-byte fragment of a triage that was still running, and an evidence pass was read mid-flight and posted on, with the real report arriving afterwards carrying three corrections that were already live.
+
+**An engine that returns no findings is a failed engine.** Not an empty one — a failed one. Say so, degrade via *When a plugin is missing* below, and tell the user in the step 7 summary which engine didn't report. The failure mode to refuse outright: reconstructing an engine's output yourself from whatever you can find and handing it to the triage subagent as engine findings. That is session-authored content entering the one channel the skill protects from session influence, and it silently destroys the independence the whole triage step exists for. If an engine produced nothing, the review has one engine, and the user should know it.
+
 ## Merge and carry forward
 
 Combine both engines into one findings list and dedupe by file, line, and substance (the two engines will overlap — e.g. both may flag a real bug). Prefer the more specific phrasing. For each surviving finding keep: file, line, what, why, suggested fix, a confidence read (use the code-review plugin's score when present, otherwise judge from how decisively the specialized agent verified it), and the source. Confidence and source feed the house-style ordering and the verdict reason back in the SKILL workflow.

@@ -104,13 +104,15 @@ Group changes into logically coherent commits. The subject describes the substan
 - **public:** `git push` (skip if nothing was committed). Never push to a branch other than the PR's head branch; never force-push.
 - **local:** commit only if the user asked; never push.
 
+**Amendments after applying.** If the user asks to change something already posted or committed — reword a reply, revise a fix, add an item — that request approves the **action**, not the **wording**. Draft the change, update the plan file, print it, `AskUserQuestion`, then apply. The step 3 gate governs every round, not just the first.
+
 ### 6. Summary
 
 Report fixes (with commit hashes), replies and their state (public), recorded pushback/clarify notes (local), and skipped items. End with the PR URL on its own line in public mode.
 
 ## Boundaries
 
-- Never edit code, post a reply, or resolve a thread the user hasn't approved at the results gate.
+- Never edit code, post a reply, or resolve a thread the user hasn't approved at the results gate — including every amendment made after the first round is applied.
 - Hand the triage subagent only the PR ref, the feedback items, the code, and off-platform source material — never this session's reasoning, intent, or debate about the change, and never a fork that inherits it.
 - Never resolve a `fix`, `pushback`, or `clarify` thread — only `dismiss-resolve` (public).
 - In public mode: never push to a branch other than the PR's head branch; never `--amend`, `--force`, or `--no-verify` unless the user explicitly asks.

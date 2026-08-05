@@ -14,8 +14,27 @@
 ## Voice
 
 - Talk to the author, not about them — address them and what to do, don't narrate the code in the third person. "Want to cap this? It retries forever if the host stays down" speaks to the author; "The retry loop lacks a bound" is a verdict about the code. Same finding, but the first opens a conversation.
+- **Name the defect before the mechanism.** Open with what is wrong, then explain how it happens. Describing the machinery and leaving the author to infer the problem is the single most common way these reviews fail — it reads as erudite and communicates nothing.
 - Lead with the problem and its consequence, then offer the fix as a suggestion. The author owns the code.
 - Be specific and short. One concrete sentence about what breaks and when beats a paragraph of hedging.
+- **One claim per sentence.** Short is not the same as dense. Welding what-it-does, a verdict, three mechanism names and a compliment into one sentence produces something the author has to decompress before they can act on it — and "be specific and short" is not licence to do it. Split them, even at the cost of more lines.
+
+## What never goes in a posted review
+
+Four failures, each caught in real use, each invisible to the model that wrote them:
+
+- **Never imply you ran anything.** This skill is a read: its Boundaries forbid running builds, tests, or lint, so a review can never honestly claim runtime verification. "I went looking for a way to re-run a finished job and couldn't find any", "I couldn't reproduce", "I tried" — all describe an investigation that did not happen. Say what the code does, not what you did to it.
+- **Don't write about the review.** No method statements, no "this is a code read", no list of which files you looked at, no restatement of the diff. The author knows what they wrote and how a review works; every such line spends their attention on you rather than on their code. Coverage caveats and limitations go in the step 7 chat summary, where they inform the user — never in the posted text.
+- **Don't tell the author their own work is good in detail.** Confirming that guards they wrote do hold, or itemising what's correct, is filler dressed as diligence. One honest overall line, then the problems.
+- **Don't over-correct into coldness.** Cutting the general opening and starting on the first bug is not "focused", it's rude — see below.
+
+## The opening
+
+Every review opens with two things, in order: what the MR does, and your overall read of it. One or two lines. This is not filler and it is not optional — arriving with a bug and no context reads as a drive-by.
+
+The distinction that matters: an opening about **the MR** is what you owe the author. An opening about **your process** is noise. "Nice piece of work — an unattended ISO lane that runs end to end, with failure handling that's clearly been through several passes. It's close." is the first. "Read through the worker, the job model and the tests; nothing was run against a queue" is the second. Write the first, never the second.
+
+Plain acknowledgement of good work belongs here and is **not** the performative praise banned above — "Great PR!" is performative, "this is close, and the failure handling is careful" is a judgment the author can use.
 - Show uncertainty when you have it: "I might be missing context, but…" invites the discussion that's the point of a review.
 - Match the repo's register — mirror the tone of the existing human comments rather than importing a house accent.
 
@@ -64,6 +83,30 @@ These illustrate the voice — they aren't a checklist of specific issues to loo
 **Architectural note — propose the alternative, weigh the author's reason:**
 
 > This new `RetryPolicy` has only the one caller it ships with, and the description says it's "for reuse later". I'd hold off on the abstraction until a second caller exists — it's easier to shape right once you can see both call sites. If there's already a concrete second consumer lined up, ignore me.
+
+**Mechanism-first — avoid.** Every one of these came back from a real review with "what does this mean?":
+
+> This MR makes 2013 durable on every job record.
+
+**Defect-first — prefer.** Same finding, opened with what's actually wrong:
+
+> Wrong ISO version. This defaults every submission to ISO 27001:2013; the standard was settled as 2022 two days before this MR, and the 2022 revision restructured Annex A — so jobs submitted now run against the wrong clause inventory.
+
+**Compressed — avoid.** Five things welded together (what it does, a scope claim, a verdict, four mechanism names, and praise), none signposted:
+
+> Makes ISO an unattended assessment type on its own lane — submit → dedicated FIFO queue → standalone worker → pipeline → report by run-ID — with the FRA flow untouched by construction. The failure semantics hold up under reading: the terminal-job re-run guard, the COMPLETED-never-demoted guard, the not-found-vs-transient split in load_job, the in-worker capacity wait.
+
+**Decompressed — prefer.** One claim per line, and the mechanism names dropped entirely — they belong in the inline findings, not the summary:
+
+> Nice piece of work — an unattended ISO lane that runs end to end, with failure handling that's clearly been through several passes. It's close.
+>
+> Two bugs got past, both in `_handle_message`, and both lose a job.
+
+**Claiming an investigation you didn't run — avoid:**
+
+> I went looking for ways to re-run a finished job or demote a saved one and couldn't find any — those guards hold.
+
+Nothing was executed; this is a code read. It also tells the author their own guards work, which they know. Cut the sentence — don't rewrite it as "I read the code and…", which is the process narration banned above.
 
 **Summary body:**
 
