@@ -21,7 +21,7 @@ All discovery, filtering, and dedup logic is deterministic and lives in `scripts
 `args` — one of:
 
 - empty → one pass over the repo of the current working directory (`gh repo view --json nameWithOwner -q .nameWithOwner`)
-- `loop [interval]` → set up the recurring check (see Recurring mode). `interval` accepts `30s`/`10m`/`1h` and overrides `config.poll_interval_minutes` for this invocation only
+- `loop [interval]` → set up the recurring check (see Recurring mode). `interval` accepts whole minutes or hours (`5m`/`15m`/`1h`; one minute is the floor, since the schedule's granularity is a minute) and overrides `config.poll_interval_minutes` for this invocation only
 - `reconfigure` → re-run the config interview (references/setup.md), keep `state` untouched, then do a normal pass
 - ad-hoc overrides, applied to this invocation only: `exclude: <login>[, <login>…]` → `--exclude <login>` per login; `include-drafts` → `--include-drafts`
 

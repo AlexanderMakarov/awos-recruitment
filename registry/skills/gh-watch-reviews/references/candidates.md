@@ -22,7 +22,7 @@ The auto modes never publish anything unattended — `pr-review`'s own gates sti
 
 - **Review here** →
   1. Write `state[number] = {sha, decision: "in_progress", via, at: <date -u +%FT%TZ>}` BEFORE anything else — this is what makes a mid-review scan a no-op.
-  2. `Skill(skill="pr-review", args="<PR URL>")`. Its gates handle drafting and approval; post nothing outside it. If the handoff fails to start — `pr-review` isn't installed and the user declines the install, or the install fails — remove the `in_progress` entry immediately and move to the next candidate: a failed start must never leave the PR locked behind the in-flight guard's two-hour window.
+  2. `Skill(skill="pr-review", args="<PR URL>")`. Its gates handle drafting and approval; post nothing outside it. If the handoff fails to start — `pr-review` isn't installed and the user declines the install, or the install fails — remove the `in_progress` entry immediately and move to the next candidate: a failed start must never leave the PR locked behind the in-flight guard until `config.stale_review_hours` elapses.
   3. When the review is submitted, flip the entry to `decision: "reviewed"` (same sha). If the user aborted the review, remove the entry (so it resurfaces) or mark `skipped` if they say so.
   4. **Immediately re-scan** (`scan.sh --once`, same flags as the pass): PRs that appeared while reviewing are handled now, same flow. Only an empty or `in_review` re-scan ends the pass.
 - **Review in new tab** →
