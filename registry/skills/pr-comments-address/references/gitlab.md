@@ -13,11 +13,14 @@
 | thread is outdated | the note's `position.head_sha` no longer matches the MR head |
 
 ```sh
+HOST=<host from the MR URL>                              # e.g. gitlab.com, or your self-managed host
+export GITLAB_HOST="$HOST"                               # pins every glab call below to the MR's instance
 PROJECT=$(printf %s '<GROUP>/<PROJECT>' | jq -sRr @uri)   # nested paths encode to group%2Fsub%2Fproject
 IID=<MR_IID>
+MR_URL="https://$HOST/<GROUP>/<PROJECT>"                  # -R accepts a full URL; use it for the porcelain
 ```
 
-For a self-managed instance, add `--hostname <host>` to every `glab api` call, or work inside a clone of that instance's repo where `glab` reads the host from the git remote.
+**Pin the host explicitly — `glab` never infers it from the MR you were given.** Every `glab` command resolves its instance from the current git remote, `GITLAB_HOST`, or the saved config, so a worktree whose remote points elsewhere silently targets the wrong GitLab. `export GITLAB_HOST="$HOST"` covers `glab api`, `glab auth status`, and the porcelain (`mr checkout`, `mr note`), which have **no `--hostname` flag** — only `-R`.
 
 ## Transport: glab first, MCP as fallback
 
@@ -30,13 +33,15 @@ For a self-managed instance, add `--hostname <host>` to every `glab api` call, o
 ## preflight
 
 ```sh
-glab auth status                                   # bail with "run glab auth login" if not authed
-ME=$(glab api user | jq -r .username)              # filters "comments not yet replied to by me"
-git rev-parse --is-inside-work-tree >/dev/null     # confirm we're in a git repo
-glab repo view -F json --jq .path_with_namespace   # must equal the MR's project path
+glab auth status --hostname "$HOST"                        # bail with "run glab auth login" if not authed
+ME=$(glab api --hostname "$HOST" user | jq -r .username)   # filters "comments not yet replied to by me"
+git rev-parse --is-inside-work-tree >/dev/null             # confirm we're in a git repo
+glab repo view -F json --jq .web_url                       # host AND path must both match the MR's
 ```
 
 (`glab api` has no `--jq` flag — pipe through `jq`. `glab repo view` and `glab mr view` do have it.)
+
+Compare `web_url`, not `path_with_namespace`: the path alone is not an identity. `gitlab.com/acme/api` and `gitlab.internal/acme/api` share it, and since the auth check above resolves whatever host `glab` is configured for, a path-only comparison can pass while you're pointed at an entirely different instance's project of the same name. The full URL settles host and path in one check.
 
 If the repo identity doesn't match the MR's project, warn and ask whether to `cd` into the clone or clone fresh. Don't silently `glab repo clone` — it may land in the wrong place.
 
@@ -49,7 +54,7 @@ If the repo identity doesn't match the MR's project, warn and ask whether to `cd
 ```sh
 git worktree add --detach <dir>   # <dir> defaults to the sibling ../<repo>-mr-<IID>
 cd <dir>
-glab mr checkout $IID             # MR source branch, fork-aware
+glab mr checkout $IID -R "$MR_URL"   # MR source branch, fork-aware
 git pull --ff-only                # move to the tip
 ```
 
@@ -58,7 +63,7 @@ git pull --ff-only                # move to the tip
 **In place — only if the user asked** (e.g. they want to review or run it in their main working tree):
 
 ```sh
-glab mr checkout $IID
+glab mr checkout $IID -R "$MR_URL"
 git pull --ff-only
 ```
 
@@ -78,8 +83,9 @@ A scannable digest of what's still open:
 
 ```sh
 glab api --paginate "projects/$PROJECT/merge_requests/$IID/discussions" | jq -r --arg me "$ME" '
-  .[] | select(all(.notes[]; .system | not)) | . as $d
-  | ($d.notes | last) as $last | $d.notes[0] as $first
+  .[] | (.notes | map(select(.system != true))) as $notes
+  | select($notes | length > 0) | . as $d
+  | ($notes | last) as $last | $notes[0] as $first
   | select($last.author.username != $me)
   | "discussion=\($d.id)  \($first.position.new_path // "(top-level)"):\($first.position.new_line // "-")  resolved=\($first.resolved // false)  last=\($last.author.username): \($last.body[0:140])"'
 ```
@@ -88,7 +94,7 @@ Build the working set:
 
 - **Discussions with a position (review threads):** any whose latest note author is not `$ME` — **don't filter on `resolved` alone.** A resolved discussion can mean "fixed" or just "someone replied and closed it without a code change"; the latter still needs handling. Keep the unresolved ones, and also surface resolved ones whose last word isn't yours for a quick judgment — keep the ones you never actually acted on, drop the genuinely handled.
 - **Top-level comments** (`individual_note: true`, no position) where the latest author isn't `$ME` and `$ME` hasn't already replied below.
-- **Skip system notes** (`system: true`) — those are GitLab's own activity entries ("changed target branch", "added 1 commit"), not feedback.
+- **Skip system notes** (`system: true`) — those are GitLab's own activity entries ("changed target branch", "added 1 commit"), not feedback. **Filter them out of `notes[]`; never discard a discussion because it contains one.** GitLab appends a system note *inside* a human diff thread whenever the anchored line moves ("changed this line in version N of the diff"), so a whole-discussion test like `select(all(.notes[]; .system | not))` drops exactly the threads that have been through review churn — measured on a real MR, that test kept 11 of 44 live threads and silently lost 33, several with the reviewer's reply as the last word. Filter the notes, then judge the discussion by what remains, as the recipe above does.
 
 **Outdated threads count too** — they still need a reply or resolution. GitLab has no `isOutdated` flag: compare a thread's `position.head_sha` against the MR's current head (`glab api "projects/$PROJECT/merge_requests/$IID" | jq -r .diff_refs.head_sha`). When they differ, the anchored line has moved or vanished — the note's `position` (`old_line` / `new_line` / paths) plus reading the file at `path` is what locates the code the reviewer meant. There is no stored diff hunk to fall back on.
 
@@ -97,21 +103,28 @@ Build the working set:
 ## reply-to-thread
 
 ```sh
-glab api -X POST "projects/$PROJECT/merge_requests/$IID/discussions/<DISCUSSION_ID>/notes" -f body='<reply>'
+BODY=$(cat <reply-file>)
+glab api -X POST "projects/$PROJECT/merge_requests/$IID/discussions/<DISCUSSION_ID>/notes" -f body="$BODY"
 ```
+
+**Build the body in a variable; don't inline it.** Replies are prose, prose contains apostrophes, and a single `'` inside `-f body='…'` closes the quote and mangles the command. Write the approved reply to a file (or a heredoc) and pass it by variable.
+
+`glab`'s field flags are the **inverse of `gh`'s**: `-F/--field` expands a leading `@` as a filename, `-f/--raw-field` sends the value literally. So `-f body=@reply.md` posts the string `@reply.md`, and `-F body=@reply.md` is what reads the file.
 
 ## reply-to-top-level
 
 GitLab models top-level comments as discussions too, so the same endpoint threads a reply underneath one — no quoting workaround needed:
 
 ```sh
-glab api -X POST "projects/$PROJECT/merge_requests/$IID/discussions/<DISCUSSION_ID>/notes" -f body='<reply>'
+BODY=$(cat <reply-file>)
+glab api -X POST "projects/$PROJECT/merge_requests/$IID/discussions/<DISCUSSION_ID>/notes" -f body="$BODY"
 ```
 
 To add a fresh top-level comment that isn't a reply to anything:
 
 ```sh
-glab mr note $IID -m '<comment>'
+BODY=$(cat <comment-file>)
+glab mr note $IID -R "$MR_URL" -m "$BODY"
 ```
 
 ## resolve-thread

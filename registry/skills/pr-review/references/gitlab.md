@@ -18,11 +18,14 @@ GitLab's model differs from GitHub's in names more than in substance. Throughout
 Set these once and reuse them in every recipe below:
 
 ```sh
+HOST=<host from the MR URL>                              # e.g. gitlab.com, or your self-managed host
+export GITLAB_HOST="$HOST"                               # pins every glab call below to the MR's instance
 PROJECT=$(printf %s '<GROUP>/<PROJECT>' | jq -sRr @uri)   # nested paths encode to group%2Fsub%2Fproject
 IID=<MR_IID>
+MR_URL="https://$HOST/<GROUP>/<PROJECT>"                  # -R accepts a full URL; use it for the porcelain
 ```
 
-For a self-managed instance, add `--hostname <host>` to every `glab api` call (or run inside a clone of that instance's repo, where `glab` picks the host up from the git remote).
+**Pin the host explicitly — `glab` never infers it from the MR you were given.** Every `glab` command resolves its instance from the current git remote, `GITLAB_HOST`, or the saved config, so running in a directory whose remote points elsewhere (or nowhere) silently targets the wrong GitLab — and this skill's `preflight` deliberately doesn't clone, so there's often no matching remote at all. `export GITLAB_HOST="$HOST"` covers all of it: `glab api`, `glab auth status`, and the porcelain (`mr view`, `mr diff`, `mr approve`, `mr note`), which have **no `--hostname` flag** — only `-R`. Belt and braces: pass `--hostname "$HOST"` on `glab api`/`glab auth status` and `-R "$MR_URL"` on the porcelain, both shown in the recipes below.
 
 ## Transport: glab first, MCP as fallback
 
@@ -35,13 +38,24 @@ For a self-managed instance, add `--hostname <host>` to every `glab api` call (o
 ## preflight
 
 ```sh
-glab auth status                            # bail with "run glab auth login" if not authed
-ME=$(glab api user | jq -r .username)       # to detect your own prior notes and draft notes
+glab auth status --hostname "$HOST"                          # bail with "run glab auth login" if not authed
+ME=$(glab api --hostname "$HOST" user | jq -r .username)     # to detect your own prior notes and draft notes
 ```
 
 (`glab api` has no `--jq` flag — pipe through `jq`. `glab mr view` does have `--jq`.)
 
-You're reviewing someone else's MR — don't check out the branch or modify project files. Read the diff through the API. (The one write allowed is the skill's own draft artifact in `review/` — that's your output, not the project's code.)
+You're reviewing someone else's MR — never switch the user's branch or modify project files. The one write allowed in their tree is the skill's own draft artifact in `review/` — that's your output, not the project's code.
+
+**A read-only checkout at MR head is allowed, and step 2 needs one.** The diff alone doesn't let the analysis engines judge a finding against its surrounding code, so put the head commit in a detached worktree outside the user's tree, hand the engines that path, and remove it when the review is delivered:
+
+```sh
+git fetch origin "refs/merge-requests/$IID/head:refs/mr/$IID"   # GitLab's MR head refspec
+git worktree add --detach <scratch-dir> "refs/mr/$IID"
+# … engines read from <scratch-dir> …
+git worktree remove --force <scratch-dir> && git update-ref -d "refs/mr/$IID"
+```
+
+Nothing here touches the user's branch or working tree, and the worktree is read-only by convention — tell the engines not to edit inside it.
 
 ### Draft-notes capability probe — run this here, before any analysis
 
@@ -49,11 +63,16 @@ Unlike GitHub, draft delivery on GitLab can be unavailable on a given instance o
 
 ```sh
 glab api "projects/$PROJECT/merge_requests/$IID/draft_notes" >/dev/null 2>&1 && DRAFTS=yes || DRAFTS=no
+
+# The GET above proves only that you can READ. Drafting is a write:
+glab api "personal_access_tokens/self" | jq -r '.scopes | join(",")'   # needs `api`; `read_api` is read-only
 ```
 
-If the exit status is ambiguous, re-run with `-i` and read the HTTP status line — a 404 and a 403 mean different things (see Failure modes) and the user can act on the difference.
+**A passing GET is not a passing POST.** GitLab's `api` scope grants read *and* write, while `read_api` grants read only — so a read-only token sails through the probe and then 403s on the first draft note, after the whole analysis pass has already run. `personal_access_tokens/self` reports the scopes without writing anything; require `api` there rather than inferring write access from the GET. Even then, treat `DRAFTS=yes` as **provisional until the first draft POST succeeds** — and if that POST fails, you're in the `DRAFTS=no` branch below, not in an error state to push past.
 
-The Draft Notes API is Free-tier and available on GitLab.com, Self-Managed and Dedicated, so `DRAFTS=yes` is the normal case. `DRAFTS=no` means an instance too old for the endpoint, a token without the scope, or an MCP-only fallback with no draft tool.
+If the probe's exit status is ambiguous, re-run with `-i` and read the HTTP status line — a 404 and a 403 mean different things (see Failure modes) and the user can act on the difference.
+
+The Draft Notes API is Free-tier and available on GitLab.com, Self-Managed and Dedicated, so `DRAFTS=yes` is the normal case. `DRAFTS=no` means the endpoint is absent, the token can't write, or an MCP-only fallback with no draft tool.
 
 Carry the result into step 5:
 
@@ -63,8 +82,8 @@ Carry the result into step 5:
 ## fetch-pr-context
 
 ```sh
-glab mr view $IID -R <GROUP>/<PROJECT> -F json --jq '{iid, title, author: .author.username, source_branch, target_branch, web_url}'
-glab mr diff $IID -R <GROUP>/<PROJECT>      # the unified diff under review
+glab mr view $IID -R "$MR_URL" -F json --jq '{iid, title, author: .author.username, source_branch, target_branch, web_url}'
+glab mr diff $IID -R "$MR_URL"              # the unified diff under review
 ```
 
 The diff defines the review surface: comment only on lines this MR added or modified.
@@ -98,18 +117,22 @@ Use it to skip points already raised, decide which open threads to agree with or
 
 ```sh
 glab api --paginate "projects/$PROJECT/merge_requests/$IID/notes" \
-  | jq -r --arg me "$ME" '[.[] | select(.author.username==$me)] | max_by(.created_at) | .created_at // "none"'
+  | jq -sr --arg me "$ME" 'add | [.[] | select(.author.username==$me)] | max_by(.created_at) | .created_at // "none"'
 ```
+
+The `jq -s | add` matters: **`glab api --paginate` emits one JSON array per page, not one merged array.** A bare `max_by` therefore reports a "most recent" per page rather than overall — slurp and concatenate before any aggregate.
 
 If that returns a timestamp, diff against what changed since it.
 
 **Your own prior comments are part of this conversation — surface them first.** A pass you (or the user) already made on this MR is the set most easily duplicated, and "existing comments" reads too easily as "other people's / the bot's". Before scanning what anyone else said, list `$ME`'s own notes explicitly:
 
 ```sh
-glab api --paginate "projects/$PROJECT/merge_requests/$IID/notes" | jq -r --arg me "$ME" '
-  .[] | select(.author.username==$me)
-  | "\(.position.new_path // "(no position)"):\(.position.new_line // "-")  note=\(.id)  \(.body[0:100])"'
+glab api --paginate "projects/$PROJECT/merge_requests/$IID/discussions" | jq -r --arg me "$ME" '
+  .[] | . as $d | .notes[] | select(.author.username==$me and (.system | not))
+  | "\(.position.new_path // "(no position)"):\(.position.new_line // "-")  discussion=\($d.id)  note=\(.id)  \(.body[0:100])"'
 ```
+
+List these from `/discussions`, not `/notes`. Both return the same notes, but a note object from `/notes` carries **no `discussion_id`** — so a `note=<id>` from there can't be turned into the `<DISCUSSION_ID>` that `reply-to-thread` needs, which is exactly what the next paragraph tells you to do with it.
 
 Treat each as a thread to build on, not a line to re-open: if a finding lands on a `path:line` you already commented on, plan a `reply-to-thread` on that existing discussion rather than a second thread. A prior comment may sit in a **resolved** discussion (the author already fixed it) — resolved still means "already raised", so don't re-flag it; at most acknowledge the fix or add a genuinely new angle as a reply.
 
@@ -128,7 +151,9 @@ glab api "projects/$PROJECT/merge_requests/$IID/draft_notes" | jq -r '
   .[] | "\(.id)  \(.position.new_path // "(no position)"):\(.position.new_line // "-")  \(.note[0:100])"'
 ```
 
-**Never-destroy rule.** If this returns rows, drafts already exist. Unlike GitHub, GitLab needs no delete-then-recreate — each draft note is created independently, so `create-draft-review` **appends** to the existing set. That makes destruction unnecessary, and therefore forbidden: never call `DELETE .../draft_notes/<id>` without explicit approval.
+**Record the count this returns as `BASELINE`** — `create-draft-review` verifies against it, since your notes are added to whatever is already there.
+
+**Never-destroy rule.** If this returns rows, drafts already exist. Unlike GitHub, GitLab needs no delete-then-recreate — each draft note is created independently, so `create-draft-review` **appends** to the existing set, and an individual note can be revised in place with `update-draft-note` below. That makes destruction unnecessary, and therefore forbidden: never call `DELETE .../draft_notes/<id>` without explicit approval.
 
 Do still tell the user what's already there before appending, and confirm — publishing is all-or-nothing (`bulk_publish` publishes *every* pending draft note, including theirs), so your review can't be submitted without carrying their drafts along with it. If they'd rather not mix the two, let them publish or delete their own drafts first.
 
@@ -159,13 +184,26 @@ glab api -X POST "projects/$PROJECT/merge_requests/$IID/draft_notes" \
   --form 'note=<summary + architectural notes, in house style>'
 ```
 
-`bulk_publish` also accepts a summary at submit time (see below) — but the user, not you, runs the submit, so the positionless draft note is what actually guarantees the summary reaches the MR. Post it either way, and still print the verbatim summary in step 7.
+`bulk_publish` also accepts a summary at submit time (see below) — but the user, not you, runs the submit, so the positionless draft note is what actually guarantees the summary reaches the MR. Post it here, and still print the verbatim summary in step 7. **Once it exists, don't also pass `note=` to `bulk_publish`** — that would post the same text a second time as a separate summary note.
 
-After creating, confirm the drafts landed — re-run `find-pending-review` and check the count matches what you posted, including the summary note. Report the count to the user with the MR URL; GitLab shows pending drafts in the MR's **Changes** tab, and publishing is a button there ("Submit review"), or:
+After creating, confirm the drafts landed — re-run `find-pending-review` and check the count is `BASELINE + <findings> + 1` for the summary note. It is not equal to what you posted: pre-existing drafts are appended to, never replaced, so comparing against the posted count alone reports a phantom failure for any user who had drafts of their own. Report the count to the user with the MR URL; GitLab shows pending drafts in the MR's **Changes** tab, and publishing is a button there ("Submit review"), or:
 
 ```sh
 glab api -X POST "projects/$PROJECT/merge_requests/$IID/draft_notes/bulk_publish"
 ```
+
+## update-draft-note
+
+Revising a draft note you already posted — the user reworded a finding at the gate, or a later round changes the summary. Edit it in place; this is the sanctioned alternative to the delete-and-recreate the never-destroy rule forbids:
+
+```sh
+BODY=$(cat <revised-note-file>)
+glab api -X PUT "projects/$PROJECT/merge_requests/$IID/draft_notes/<DRAFT_NOTE_ID>" --form "note=$BODY"
+```
+
+Ids come from `find-pending-review`. The position is preserved — you're replacing the text, not re-anchoring it. Build the body in a variable rather than inlining it: review prose contains apostrophes, and one of them inside `--form 'note=…'` truncates the note at the quote.
+
+**Amending after delivery still requires the gate.** A user asking for a change approves the *action*, not the wording — print the revised text and get approval before the `PUT`, exactly as at first delivery.
 
 ## submit-review
 
@@ -173,17 +211,29 @@ Only when the user explicitly chooses to submit now instead of leaving drafts. `
 
 ```sh
 glab api -X POST "projects/$PROJECT/merge_requests/$IID/draft_notes/bulk_publish" \
-  --form 'note=<summary>' \
   --form 'reviewer_state=requested_changes'
+  # --form 'note=<summary>'   ← ONLY if no positionless summary draft exists; otherwise it double-posts
 ```
 
-`reviewer_state` is `reviewed` or `requested_changes`. Per GitLab's docs it "does not record a formal approval" — approving is a separate call, and it's the one verdict the user must choose explicitly:
+`note=` here creates a summary note *in addition to* publishing the drafts. `create-draft-review` normally already posted the summary as a positionless draft, so passing it again lands the same text twice — include it only when there's no summary draft to publish (the user is submitting their own hand-written drafts, or the summary POST failed).
+
+`reviewer_state` is `reviewed` or `requested_changes` — the sample above is not a fixed verdict; the user picks it, per the SKILL's step 6. Per GitLab's docs it "does not record a formal approval" — approving is a separate call, and it's the one verdict the user must choose explicitly:
 
 ```sh
-glab mr approve $IID -R <GROUP>/<PROJECT>
+glab mr approve $IID -R "$MR_URL"
 ```
 
-If `DRAFTS=no`, there is nothing to publish and this operation doesn't apply — the user chose publish-now at the adapted gate, so post each finding as a real discussion instead (same `--form position[...]` fields as `create-draft-review`, against `.../discussions`, with `body=` in place of `note=`), and post the summary with `glab mr note $IID -m '<summary>'`.
+### The `DRAFTS=no` publish-now path
+
+If `DRAFTS=no` there is nothing to publish, so this operation doesn't apply: the user chose publish-now at the adapted gate and each finding goes up as a **real, immediately visible discussion** (same `--form position[...]` fields as `create-draft-review`, against `.../discussions`, with `body=` in place of `note=`).
+
+That difference matters. Drafts are atomic — the user submits them as one review — but this path is N separate live posts, so a failure halfway leaves the author looking at inline criticism with no summary and no verdict. Run it as a procedure, not a loop:
+
+1. Keep a **posted / remaining** list as you go, and post the findings before the summary.
+2. **Stop at the first failure** — don't continue down the list. A partial review is a state to escape, not to extend.
+3. Fold every unposted finding **verbatim** into the summary note, so nothing approved at the gate is silently dropped.
+4. Post the summary on **both** paths, success and abort, with `BODY=$(cat <summary-file>)` and `glab mr note $IID -R "$MR_URL" -m "$BODY"` — on the abort path it's what tells the author the review is incomplete and why.
+5. Verify the count of posted discussions against the approved set, the same check `create-draft-review` does, and report any shortfall to the user explicitly.
 
 ## reply-to-thread
 
@@ -198,8 +248,11 @@ glab api -X POST "projects/$PROJECT/merge_requests/$IID/draft_notes" \
 To reply immediately instead (when there are no drafts to keep it with):
 
 ```sh
-glab api -X POST "projects/$PROJECT/merge_requests/$IID/discussions/<DISCUSSION_ID>/notes" -f body='<reply>'
+BODY=$(cat <reply-file>)
+glab api -X POST "projects/$PROJECT/merge_requests/$IID/discussions/<DISCUSSION_ID>/notes" -f body="$BODY"
 ```
+
+Build the body in a variable rather than inlining it — an apostrophe in review prose closes `-f body='…'` early and mangles the call. Note `glab`'s flags are the inverse of `gh`'s here: `-F/--field` expands a leading `@` as a filename, `-f/--raw-field` sends it literally, so `-f body=@file` posts the string `@file`.
 
 Don't resolve other people's discussions — you're the reviewer, not the author. (A draft note can carry `resolve_discussion=true`; don't use it here.)
 
@@ -208,8 +261,9 @@ Don't resolve other people's discussions — you're the reviewer, not the author
 | Symptom | Handling |
 |---|---|
 | `glab auth status` fails | Bail with "run `glab auth login`" — or, for a self-managed host, `glab auth login --hostname <host>`. |
-| Draft-notes probe returns 404 | `DRAFTS=no` — instance predates the endpoint. Adapt the step 5 gate (publish now vs file only); never call it a draft. |
-| Draft-notes probe returns 401/403 | `DRAFTS=no` — the token lacks `api` scope (a read-only token can fetch but not draft). Say which, so the user can fix it and retry rather than losing the draft path silently. |
+| Draft-notes probe returns 404 | Endpoint absent, wrong project/iid, or a project this token can't see — GitLab returns 404 rather than 403 to avoid leaking existence. Check which before concluding; only the first is genuinely `DRAFTS=no`. Adapt the step 5 gate; never call a publish a draft. |
+| Draft-notes probe returns 401/403 | Likely a token without `api` scope (`read_api` reads but cannot write) — confirm with `personal_access_tokens/self` rather than assuming. Say which, so the user can fix it and retry rather than losing the draft path silently. |
+| First draft POST 403s after a passing probe | The probe only proved read access. Treat it as `DRAFTS=no`, return to the gate with the publish-now / file-only choice, and don't retry the drafts. |
 | `find-pending-review` returns rows | Drafts already exist and may be the user's. Append, never delete — and tell them first, since `bulk_publish` will publish theirs too. |
 | Draft/discussion POST 400 "Note position is invalid" | The SHAs are stale or the line isn't in the diff. Refetch `diff_refs` and retry once; if it still fails, move the finding into the summary rather than dropping it. |
 | Draft/discussion POST 400 on `line_range` | Multi-line anchoring — degrade to a single-line comment and describe the span in the text. |

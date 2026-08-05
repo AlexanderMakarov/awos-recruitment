@@ -20,13 +20,13 @@ Decide the mode before starting the workflow, and state it in one line — the w
 
 ## Platform (public mode)
 
-Resolve the platform before step 1 and state it alongside the mode. Take the first signal that answers:
+Resolve the platform before step 1 and state it alongside the mode. Resolve in this precedence order, taking the first that answers — a later signal never overrides an earlier one:
 
 1. the host in the PR/MR URL the user gave;
 2. the host of the repo's `git remote` (`git remote get-url origin`);
 3. which CLI is authenticated (`gh auth status` / `glab auth status`).
 
-`github.com` or a GitHub Enterprise host → [references/github.md](references/github.md). `gitlab.com` or a self-managed GitLab host → [references/gitlab.md](references/gitlab.md). If the signals conflict or none resolves, ask with `AskUserQuestion` — never guess, since the wrong reference posts nothing or posts to the wrong place.
+`github.com` or a GitHub Enterprise host → [references/github.md](references/github.md). `gitlab.com` or a self-managed GitLab host → [references/gitlab.md](references/gitlab.md). If none of the three resolves, ask with `AskUserQuestion` — never guess, since the wrong reference posts nothing or posts to the wrong place.
 
 The workflow below is platform-agnostic and names operations (`preflight`, `fetch-pr-context`, `create-draft-review`, …); the selected reference defines them. It says "PR" throughout — on GitLab read merge request, and `<NUM>` as the MR `iid`. Local mode needs none of this.
 
