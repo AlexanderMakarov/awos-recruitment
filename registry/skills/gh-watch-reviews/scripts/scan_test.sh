@@ -629,6 +629,34 @@ OUT="$("$SCAN" --state "$STATE" --mark-armed 0 2>"$SANDBOX/stderr")"
 assert_eq "zero rejected" "error" "$(jqout .status)"
 teardown
 
+CASE="an exclusion matches the whole login, not a substring of it"
+setup
+# The bug this pins: jq's `inside` compares strings by substring, so
+# `["ali"] | inside(["alice"])` is true and excluding "alice" silently dropped
+# an unrelated author "ali" — a PR needing review that never surfaces.
+write_state '{}' '{"exclude_authors": ["alice"]}'
+{ pr 90 "From ali" ali; pr 91 "From alice" alice; pr 92 "From robotics" robotics; } | jq -s . > "$FAKE_GH_DIR/unrequested.json"
+run_once
+assert_eq "only the exact match is excluded" "90,92" "$(jqout '.candidates | map(.number) | sort | join(",")')"
+teardown
+
+CASE="the same exactness applies to the ad-hoc --exclude flag"
+setup
+{ pr 93 "From bot" bot; pr 94 "From robotics" robotics; } | jq -s . > "$FAKE_GH_DIR/unrequested.json"
+run_once --exclude robotics
+assert_eq "bot survives excluding robotics" "93" "$(jqout '.candidates | map(.number) | join(",")')"
+teardown
+
+CASE="a value-taking flag with no value fails as JSON, not as a bash crash"
+setup
+OUT="$("$SCAN" --once --repo 2>/dev/null)"
+RC=$?
+assert_eq "rc" 1 "$RC"
+assert_eq "status" "error" "$(jqout .status)"
+assert_eq "names the flag" "yes" "$(echo "$OUT" | jq -r 'if (.message | test("--repo")) then "yes" else "no" end')"
+assert_eq "still carries the contract" "false" "$(jqout .retryable)"
+teardown
+
 # ---------- summary ----------
 
 echo

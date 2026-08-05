@@ -93,21 +93,31 @@ fail() {
   exit 1
 }
 
+# A flag whose value is missing would otherwise expand "$2" unbound under
+# `set -u`: bash writes to stderr and exits with nothing on stdout, breaking the
+# promise in the header that stdout is always a single JSON object.
+need_value() { [ $# -ge 2 ] || fail "missing value for argument: $1"; }
+
 while [ $# -gt 0 ]; do
   case "$1" in
-    --repo) REPO="$2"; shift 2 ;;
-    --state) STATE_FILE="$2"; shift 2 ;;
+    --repo) need_value "$@"; REPO="$2"; shift 2 ;;
+    --state) need_value "$@"; STATE_FILE="$2"; shift 2 ;;
     --once) shift ;;  # the only mode; accepted so the documented command reads clearly
-    --stale-hours) STALE_HOURS="$2"; shift 2 ;;
-    --mark-armed) MARK_ARMED="$2"; shift 2 ;;
+    --stale-hours) need_value "$@"; STALE_HOURS="$2"; shift 2 ;;
+    --mark-armed) need_value "$@"; MARK_ARMED="$2"; shift 2 ;;
     --mark-stopped) MARK_STOPPED=1; shift ;;
-    --exclude) ADHOC_EXCLUDES+=("$2"); shift 2 ;;
+    --exclude) need_value "$@"; ADHOC_EXCLUDES+=("$2"); shift 2 ;;
     --include-drafts) ADHOC_DRAFTS=true; shift ;;
     *) fail "unknown argument: $1" ;;
   esac
 done
 
-command -v jq >/dev/null 2>&1 || { echo '{"status":"error","message":"jq not found"}'; exit 1; }
+# Cannot route through fail(), which builds its JSON with jq. Hand-written so
+# this path still satisfies the contract every other error path is tested for.
+command -v jq >/dev/null 2>&1 || {
+  echo '{"status":"error","message":"jq not found","retryable":false,"line":"gh-watch-reviews: search failed — jq not found"}'
+  exit 1
+}
 
 command -v gh >/dev/null 2>&1 || fail "gh not found"
 
@@ -314,7 +324,10 @@ scan() {
     def keyed(arr; v): arr | map({key: (.number | tostring), value: (. + {via: v})}) | from_entries;
     (keyed($unrequested; "unrequested") + keyed($requested; "requested")) | [.[]]
     | map(select(($cfg.exclude_bots and .author.is_bot) | not))
-    | map(select(([.author.login] | inside($cfg.exclude_authors + $adhoc_ex)) | not))
+    # IN(), not inside(): `inside` compares strings by substring, so excluding
+    # "alice" also suppressed an unrelated author "ali" — a PR needing review
+    # silently never surfacing.
+    | map(select((.author.login | IN((($cfg.exclude_authors // []) + $adhoc_ex)[])) | not))
     | map(select((.isDraft and (($cfg.include_drafts or $adhoc_drafts) | not)) | not))
     | map(. as $p | $st[($p.number | tostring)] as $e |
         if $e == null then
