@@ -18,6 +18,8 @@
 - Lead with the problem and its consequence, then offer the fix as a suggestion. The author owns the code.
 - Be specific and short. One concrete sentence about what breaks and when beats a paragraph of hedging.
 - **One claim per sentence.** Short is not the same as dense. Welding what-it-does, a verdict, three mechanism names and a compliment into one sentence produces something the author has to decompress before they can act on it — and "be specific and short" is not licence to do it. Split them, even at the cost of more lines.
+- Show uncertainty when you have it: "I might be missing context, but…" invites the discussion that's the point of a review.
+- Match the repo's register — mirror the tone of the existing human comments rather than importing a house accent.
 
 ## What never goes in a posted review
 
@@ -32,11 +34,11 @@ Four failures, each caught in real use, each invisible to the model that wrote t
 
 Every review opens with two things, in order: what the MR does, and your overall read of it. One or two lines. This is not filler and it is not optional — arriving with a bug and no context reads as a drive-by.
 
-The distinction that matters: an opening about **the MR** is what you owe the author. An opening about **your process** is noise. "Nice piece of work — an unattended ISO lane that runs end to end, with failure handling that's clearly been through several passes. It's close." is the first. "Read through the worker, the job model and the tests; nothing was run against a queue" is the second. Write the first, never the second.
+The distinction that matters: an opening about **the MR** is what you owe the author — what this change does, and how close it is. An opening about **your process** is noise — what you read, how you checked, what you couldn't check. Write the first kind, never the second.
 
-Plain acknowledgement of good work belongs here and is **not** the performative praise banned above — "Great PR!" is performative, "this is close, and the failure handling is careful" is a judgment the author can use.
-- Show uncertainty when you have it: "I might be missing context, but…" invites the discussion that's the point of a review.
-- Match the repo's register — mirror the tone of the existing human comments rather than importing a house accent.
+Plain acknowledgement of good work belongs here and is **not** the performative praise banned above. The test is whether the sentence could only have been written about *this* change: "Great PR!" fits anything, so it's performative; naming the specific thing that was done well is a judgment the author can use.
+
+**Write the opening from this MR's own facts, and never carry one over from another review.** Every opening below is an illustration of *shape*, not a phrase to reuse — there is no house opener, and a first line that would fit any PR is filler no matter how warm it sounds. If your opening doesn't name something only this change did, you haven't written one yet.
 
 ## Pushback and discussion
 
@@ -98,9 +100,19 @@ These illustrate the voice — they aren't a checklist of specific issues to loo
 
 **Decompressed — prefer.** One claim per line, and the mechanism names dropped entirely — they belong in the inline findings, not the summary:
 
-> Nice piece of work — an unattended ISO lane that runs end to end, with failure handling that's clearly been through several passes. It's close.
+> An unattended ISO lane that runs end to end, and the failure handling has clearly been through several passes. It's close.
 >
 > Two bugs got past, both in `_handle_message`, and both lose a job.
+
+**Openings vary with the change — copy the shape, not the words.** Three from different reviews, none of them a template:
+
+> Straightforward queue swap, and the migration path is the part I'd have worried about — it's handled. One thing to sort out before merge.
+
+> This does what the ticket asked and the tests are the right ones. I've got a question about the retry semantics that might change the design, so worth reading that one first.
+
+> Big change, and splitting the schema migration into its own commit made it reviewable — thanks for that. Two blockers and a handful of smaller notes.
+
+Each names something only that PR did. None opens with the same words, and none would survive being pasted onto a different PR — which is the test.
 
 **Claiming an investigation you didn't run — avoid:**
 
