@@ -1,6 +1,6 @@
 ---
 name: pr-comments-address
-description: Use when working through code-review feedback to apply fixes and replies — "address the PR comments", "reply to CodeRabbit/Codex feedback", "resolve these review threads", "apply this review". Works in two modes. Public mode (default) responds to reviewer feedback on a GitHub pull request you authored — fix, reply, resolve, commit, and push. Local mode — triggered when the request says "locally", "for myself", "apply this review", or "don't post" — applies feedback from a local review file to your working tree, posting nothing to a review platform. Each item gets a proposed fix or reply for your approval first. This is the author's side; to review someone else's PR, use pr-review.
+description: Use when working through code-review feedback to apply fixes and replies — "address the PR comments", "address the MR comments", "reply to CodeRabbit/Codex feedback", "resolve these review threads", "apply this review". Works in two modes. Public mode (default) responds to reviewer feedback on a pull request or merge request you authored, on GitHub or GitLab — fix, reply, resolve, commit, and push. Local mode — triggered when the request says "locally", "for myself", "apply this review", or "don't post" — applies feedback from a local review file to your working tree, posting nothing to a review platform. Each item gets a proposed fix or reply for your approval first. This is the author's side; to review someone else's PR, use pr-review.
 ---
 
 <!-- No `context: fork`: forked skills run as subagents, which cannot use AskUserQuestion — the per-item approval gate this skill is built around. For isolation from other work, invoke this skill in a dedicated session instead. -->
@@ -13,10 +13,22 @@ Work through reviewer feedback with technical rigor over social comfort. Verify 
 
 Decide the mode before starting the workflow, and state it in one line.
 
-- **public** (default): respond to feedback on a GitHub PR **you authored**. Fetch unresolved threads and comments, then fix, reply, resolve, commit, and push. Uses [references/github.md](references/github.md).
+- **public** (default): respond to feedback on a PR **you authored**. Fetch unresolved threads and comments, then fix, reply, resolve, commit, and push. Uses the platform reference selected below.
 - **local**: apply feedback that lives **on your machine** — a local review file (e.g. one written by pr-review's local mode) or feedback the user pastes. Edit the working tree only; nothing leaves the machine. Use this when the request says "locally", "for myself", "apply this review", "don't post", or points at a review file. Uses [references/local.md](references/local.md).
 
 **Choosing:** if the request signals local (the trigger words above, or names a review file), use local. If it references a PR (URL or `owner/repo#N`), use public. If ambiguous, ask with `AskUserQuestion`, offering Public as the default.
+
+## Platform (public mode)
+
+Resolve the platform before step 1 and state it alongside the mode. Resolve in this precedence order, taking the first that answers — a later signal never overrides an earlier one:
+
+1. the host in the PR/MR URL the user gave;
+2. the host of the repo's `git remote` (`git remote get-url origin`);
+3. which CLI is authenticated (`gh auth status` / `glab auth status`).
+
+`github.com` or a GitHub Enterprise host → [references/github.md](references/github.md). `gitlab.com` or a self-managed GitLab host → [references/gitlab.md](references/gitlab.md). If none of the three resolves, ask with `AskUserQuestion` — never guess, since the wrong reference fetches nothing or replies in the wrong place.
+
+The workflow below is platform-agnostic and names operations (`preflight`, `checkout-pr`, `fetch-working-set`, `reply-to-thread`, `resolve-thread`); the selected reference defines them. It says "PR" throughout — on GitLab read merge request, `<NUM>` as the MR `iid`, and "thread" as discussion. Local mode needs none of this.
 
 Treat automated reviewers (CodeRabbit, Codex, Bito, Sonar, and similar) as suggestions to evaluate, not directives — many of their comments are mechanical and some are confidently wrong. Agreement is earned on the merits.
 
@@ -37,7 +49,7 @@ Treat automated reviewers (CodeRabbit, Codex, Bito, Sonar, and similar) as sugge
 
 ### 1. Gather feedback items
 
-- **public:** run `preflight`, `checkout-pr`, and `fetch-working-set` from [references/github.md](references/github.md). `checkout-pr` handles the branch: if you're **already on the PR's head branch**, stay put and just pull to the tip — a worktree would be redundant. Otherwise it defaults to an **isolated git worktree**, so the user's current branch and working tree stay untouched — only check the branch out in place if the user asked for that (e.g. they want to review or run it in their main working tree). If the working set is empty, say "Nothing new to address" and stop.
+- **public:** run `preflight`, `checkout-pr`, and `fetch-working-set` from the platform reference (selected above). `checkout-pr` handles the branch: if you're **already on the PR's head branch**, stay put and just pull to the tip — a worktree would be redundant. Otherwise it defaults to an **isolated git worktree**, so the user's current branch and working tree stay untouched — only check the branch out in place if the user asked for that (e.g. they want to review or run it in their main working tree). If the working set is empty, say "Nothing new to address" and stop.
 - **local:** run `read-feedback` from [references/local.md](references/local.md) to load the review file or pasted text into discrete items.
 
 ### 2. Triage in a fresh subagent

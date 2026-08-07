@@ -1,6 +1,6 @@
 # GitHub operations — pr-comments-address
 
-> **Part of:** [pr-comments-address](../SKILL.md). The GitHub commands for the receiving workflow in **public mode**, keyed by operation name. Local mode never runs any of these — it stays on the working tree and never invokes `gh` or posts to the platform. Keying by operation name keeps the SKILL workflow platform-agnostic, so similar reference files could be added for other review platforms (GitLab, Azure DevOps, …) and selected by the PR URL host if that's ever needed.
+> **Part of:** [pr-comments-address](../SKILL.md). The GitHub commands for the receiving workflow in **public mode**, keyed by operation name. Local mode never runs any of these — it stays on the working tree and never invokes `gh` or posts to the platform. Keying by operation name keeps the SKILL workflow platform-agnostic: [gitlab.md](gitlab.md) implements the same operations for GitLab, and the SKILL selects between them by host.
 
 ## preflight
 
