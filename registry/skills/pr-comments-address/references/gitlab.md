@@ -20,6 +20,8 @@ IID=<MR_IID>
 MR_URL="https://$HOST/<GROUP>/<PROJECT>"                  # -R accepts a full URL; use it for the porcelain
 ```
 
+**Never name a shell variable `path`.** In zsh — the default shell here — `path` is the array form of `PATH`, tied to it, so `local path="src/api/iso.ts"` wipes out the command search path and every external binary vanishes for the rest of that function (`command not found: cat`, `: glab`). It reads as a broken environment rather than a naming collision. Use `file_path`. Same trap for `cdpath`, `fpath`, `manpath`, and `status`.
+
 **Pin the host explicitly — `glab` never infers it from the MR you were given.** Every `glab` command resolves its instance from the current git remote, `GITLAB_HOST`, or the saved config, so a worktree whose remote points elsewhere silently targets the wrong GitLab. `export GITLAB_HOST="$HOST"` covers `glab api`, `glab auth status`, and the porcelain (`mr checkout`, `mr note`), which have **no `--hostname` flag** — only `-R`.
 
 ## Transport: glab first, MCP as fallback
@@ -124,7 +126,7 @@ To add a fresh top-level comment that isn't a reply to anything:
 
 ```sh
 BODY=$(cat <comment-file>)
-glab mr note $IID -R "$MR_URL" -m "$BODY"
+glab mr note create $IID -R "$MR_URL" -m "$BODY"
 ```
 
 ## resolve-thread
@@ -145,6 +147,7 @@ Only `resolvable` discussions can be resolved — diff threads are, plain top-le
 | `PUT .../discussions/<id>` → already resolved | Fine, continue. |
 | Reply → 404 "Discussion Not Found" | Deleted upstream, or an `id` from a different MR. Skip and note it in the summary. |
 | Every discussion looks like noise | You're reading system notes — filter `system: true` out. |
+| `command not found` for a binary that plainly exists (`cat`, `glab`) | A shell variable named `path` clobbered `PATH` (zsh ties them). Rename it to `file_path` — don't paper over it with absolute binary paths, which leaves every unqualified command still broken. |
 | `git push` rejected (non-fast-forward) | Fetch and integrate (rebase or merge, per the project's convention), ask before re-pushing. Never force-push. |
 | Push rejected by a protected-branch rule | The MR source branch is protected for your role. Stop and tell the user; don't retry with `--force`. |
 | MR `iid` vs `id` confusion (404 on a number that exists) | Every endpoint here takes the **iid** — the number in the MR's URL. |
