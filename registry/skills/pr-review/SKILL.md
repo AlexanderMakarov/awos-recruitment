@@ -89,6 +89,14 @@ Turn the survivors into a review per [references/house-style.md](references/hous
 
 No severity badges, plain citations. Order by what matters, explained in words. Draft a one-line **verdict** intent for public mode (request changes / comment / approve), but don't act on it until delivery.
 
+**Pick the verdict from what the remaining findings can cost, not from how many there are.** Classify each survivor by two things: how often that code actually runs, and what goes wrong when it does.
+
+- **request changes** — it changes what the code does on a path that runs normally, or it loses data, corrupts state, or opens a security hole. Rarity doesn't rescue those: a one-in-a-million path that corrupts data still blocks.
+- **approve** — nothing major remains. A finding is *not* major when it is confined to code that runs only in rare situations **and** its worst outcome is limited to visibility — log fields, alert payloads, diagnosability — or to performance. Docs, comments and test hygiene never block on their own.
+- **comment** — the residue: a real defect on an ordinary path that isn't severe enough to block, or a question whose answer could change the design. If you're reaching for comment because approving *feels* presumptuous, that's not a reason — apply the rule.
+
+Holding a PR open over log-field quality and comment accuracy costs more in cycle time than those findings cost in risk — and it costs most on a late round, where the remainder is nearly always visibility and hygiene. Approving is a statement about the verdict, never a reason to drop or soften a finding: post them all, and say plainly in the summary why you're approving anyway. This is the verdict *intent* either way — the user picks the verdict at delivery.
+
 **Materialize the draft with `Write`** to the `review/` folder of **the repo whose code is under review** — the same one local mode delivers into (create it if missing; it stays out of commits, gitignored or per the user's preference): `review/pr-<N>-draft.md`. In a multi-repo or orchestrator checkout, that means the service's own clone, not the parent — say which path you used, since a sibling `review/` from an earlier session is easy to confuse it with. A draft composed only in thinking does not exist — the `Write` call is the verifiable proof it does, and an in-repo file is one the user can open in their editor no matter what happens to the chat. Don't proceed to the gate without this file.
 
 ### 5. Results gate
