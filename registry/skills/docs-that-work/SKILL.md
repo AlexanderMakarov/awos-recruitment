@@ -25,7 +25,7 @@ Directory trees, exports, types, linter rules, commands, dependencies, test loca
 Two things survive this filter:
 
 - **Intent, not actual shape.** Code reveals the **actual** shape of the codebase, not the **intended** one. Where they diverge — an anti-pattern that leaked in and spread — the divergence is undiscoverable from code and is exactly what needs documenting. See [Design Intent](#design-intent) below.
-- **Expensive lookups.** The environment is a source of truth too — `package.json` scripts, config files, `--help` output — and a doc restating it is a **cache**. A cache earns its cost only when the lookup is expensive: the real entrypoint buried under four Makefile includes, the test command that differs from the one in `package.json`. One-file, one-command lookups stay with the environment, where they cannot go stale.
+- **Expensive lookups.** Discoverable is not the same as cheap to discover. Where the answer takes a chain of files to reconstruct — the real entrypoint threaded through four Makefile includes, the suite CI actually gates on rather than the one `package.json` advertises — a doc line is a shortcut worth its cost. Where it takes one `grep`, the config file is the better home: config cannot drift from itself, a copy of it can.
 
 ### Filter 2 — no-op
 
@@ -36,13 +36,13 @@ A line can be undiscoverable and still worthless. "Write clean code", "add tests
 - No-op: "Handle errors properly." → Live: "Every handler returns the `{error: {...}}` envelope — a bare 500 breaks the mobile client's parser."
 - No-op: "Keep functions small." → Live: "Split service methods by transaction boundary, not by length — one DB transaction per method."
 
-The test is relative to the **model's default**, not to a reader's ignorance. Two people who disagree about a no-op disagree about what the default is — settle it by deleting the line and running the task, not by argument. When a line fails, delete the whole line rather than trim words from it.
+Measure against the **model's default**, not against a new hire's ignorance — the reader here already knows how to write code. When two people cannot agree that a line is a no-op, what they actually disagree about is how the agent behaves without it, and that is an experiment rather than a debate: pull the line, run the task, compare. A line that fails comes out whole — softening the wording of a no-op leaves a shorter no-op.
 
 Every line that survives both filters still carries a maintenance cost that compounds across every session. Stale docs cause worse decisions than no docs.
 
 ## Write the Target, Not the Ban
 
-A prohibition drags the forbidden behavior into context and makes it _more_ available, not less — the ban half-reads as an instruction to do the thing. State the behavior you want, so the banned one is never spoken:
+A rule written as a ban has to describe the anti-pattern in order to forbid it — so the file spells out the wrong shape in detail and the right one not at all, and the shape an agent has just read in detail is the one it reaches for. Describe the shape you want, and the wrong one never enters the file:
 
 - Weak: "Don't use floats for money." → Strong: "Money is stored as integer cents everywhere."
 - Weak: "Never import from `internal/` outside its module." → Strong: "Cross-module access goes through the package's public `api.py`."

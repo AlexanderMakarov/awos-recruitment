@@ -30,6 +30,10 @@ npx @provectusinc/awos-recruitment skill docs-that-work
 | `references/anti-patterns.md` | Bloat examples, discoverable content catalog, three-question test, no-op catalog |
 | `references/design-intent.md` | Design Intent format, authoring protocol, maintenance rules |
 
+## Credits
+
+The no-op test, the expensive-lookup exception, the split context budgets, and the "state the target, not the ban" rule are adapted from [`writing-for-agents`](https://github.com/mattpocock/skills/tree/main/skills/productivity/writing-for-agents) by Matt Pocock (MIT).
+
 ## Pairs With
 
 The `docs-that-work-gate` hook blocks a commit whose changed files have a `CLAUDE.md` or `README.md` that was not refreshed, and points the agent at this skill:

@@ -71,7 +71,7 @@ Note the Zustand line: it is a drift rule ("previous migration was partial"). A 
 If it's in a file an agent can read, it doesn't need documentation — with two exceptions:
 
 - **Drift.** When code has drifted from the intended pattern, the file shows the drift, not the intent. That case is covered by the guard in the test below.
-- **Expensive lookups.** A doc line that restates the environment is a cache of a lookup, and a cache earns its cost only when the lookup is expensive. `just test` in a justfile is one `grep` away — leave it. "The suite that gates CI is `just test-integration`, not `just test`" is a fact no single file states — write it.
+- **Expensive lookups.** Some answers are technically in the repo but take a chain of files to reconstruct. `just test` sits in the justfile one `grep` away — leave it there. "The suite that gates CI is `just test-integration`, not `just test`" is spread across a workflow file and a justfile and stated outright by neither — write that one down.
 
 ## The Three-Question Test
 
@@ -105,7 +105,7 @@ The three-question test only catches lines the code already answers. A second cl
 
 The pattern: a no-op names a **topic** or a **virtue**; a live line names a **specific fact that flips a decision**. When a line fails the test, delete the whole line — a trimmed no-op is still a no-op.
 
-Two people who disagree about whether a line is a no-op disagree about the model's default. Settle it by deleting the line and running the task, not by debate.
+Disagreement over whether a line is a no-op is really disagreement over how the agent behaves without it. Resolve it by experiment — pull the line, run the task, compare the result — rather than by argument.
 
 ## Common Mistakes
 
