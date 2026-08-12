@@ -1,7 +1,8 @@
 ---
 name: gh-watch-reviews
-description: Use when the user wants to watch the current GitHub repo for pull requests that need their review — new PRs, explicit review requests, re-requests after new commits — e.g. "watch for incoming reviews", "check PRs needing my review", or as the recurring body of a /loop invocation. GitHub-only (gh CLI). Not for reviewing one specific known PR (invoke pr-review directly).
-argument-hint: "[reconfigure | exclude: <login>, ... | include-drafts]"
+description: Use when the user wants to watch the current GitHub repo for pull requests that need their review — new PRs, explicit review requests, re-requests after new commits — e.g. "watch for incoming reviews", "check PRs needing my review", or to set up a recurring check. GitHub-only (gh CLI). Not for reviewing one specific known PR (invoke pr-review directly).
+argument-hint: "[loop [interval] | reconfigure | exclude: <login>, ... | include-drafts]"
+disable-model-invocation: true
 ---
 
 <!-- Deliberately NOT `context: fork`: this skill needs AskUserQuestion and the Skill tool, which forked/subagent skills cannot use (same constraint as pr-review). -->
@@ -10,145 +11,71 @@ argument-hint: "[reconfigure | exclude: <login>, ... | include-drafts]"
 
 ## Goal
 
-Surface open PRs in the current repo that need the **user's** review and hand each to the `pr-review` skill, one at a time. The **first pass in a repo** triages the pre-existing backlog with the user's approval per PR; **every later pass auto-starts the review** of a newly-appeared PR without asking — that is the whole point of watching. This skill never reviews code itself and never posts anything to GitHub; `pr-review`'s own gates control publishing.
+Surface open PRs in the current repo that need the **user's** review and hand each to the `pr-review` skill, one at a time. This skill never reviews code itself and never posts anything to GitHub; `pr-review`'s own gates control publishing.
 
-**Dependency:** the `pr-review` skill from this registry. If it isn't available when the user picks "Review now", offer to install it first: `npx @provectusinc/awos-recruitment skill pr-review`.
+All discovery, filtering, and dedup logic is deterministic and lives in `scripts/scan.sh` (under this skill's base directory) — a pass costs one Bash call, and you act only on its JSON verdict. Don't re-derive its decisions.
+
+**Dependency:** the `pr-review` skill from this registry. If it isn't available when a review should start, offer to install it first: `npx @provectusinc/awos-recruitment skill pr-review`.
 
 ## Inputs
 
 `args` — one of:
 
-- empty → one watch pass over the repo of the current working directory (`gh repo view --json nameWithOwner -q .nameWithOwner`)
-- `reconfigure` → re-run the config interview (step 1), keep `state` untouched, then do a normal pass
-- ad-hoc overrides, applied to this invocation only (config file unchanged): `exclude: <login>[, <login>…]`, `include-drafts`
+- empty → one pass over the repo of the current working directory (`gh repo view --json nameWithOwner -q .nameWithOwner`)
+- `loop [interval]` → set up the recurring check (see Recurring mode). `interval` accepts whole minutes or hours (`5m`/`15m`/`1h`; one minute is the floor, since the schedule's granularity is a minute) and overrides `config.poll_interval_minutes` for this invocation only
+- `reconfigure` → re-run the config interview (references/setup.md), keep `state` untouched, then do a normal pass
+- ad-hoc overrides, applied to this invocation only: `exclude: <login>[, <login>…]` → `--exclude <login>` per login; `include-drafts` → `--include-drafts`
 
-Recurring use is `/loop 10m /gh-watch-reviews` — the interval is `/loop`'s native parameter; this skill never schedules its own wakeups.
+The recurring form is `loop` (Recurring mode). If this invocation IS a `/loop` tick whose body re-injects this whole file — the expensive shape — complete the pass normally and, once per session, say so in one line and give the thin body from Recurring mode as the replacement.
 
-## The per-repo file: `.claude/gh-watch-reviews.local.json`
+## One pass
 
-One file in the watched repo holds user config and machine-managed dedup state. Read it with the Read tool; write with Write. Never ask the user to edit `state` by hand.
-
-Read the file **once per session** (first pass); later ticks reuse the in-context copy — this session is the file's only writer, and config changes go through `reconfigure`. Writes still go to disk immediately (they must survive the session), but a tick that decides nothing writes nothing. If the session has been compacted since the last read — the file's contents no longer sit verbatim in context — re-read it from disk before trusting anything: a summary's recollection of `state` is not `state`.
-
-```json
-{
-  "config": {
-    "exclude_bots": true,
-    "exclude_authors": [],
-    "include_drafts": false,
-    "watch_unrequested": true
-  },
-  "state": {
-    "118": { "sha": "9f2c41d8b6a03e75c1d4f0a2b8e6519c3d7a0f4e", "decision": "reviewed", "via": "requested", "at": "2026-07-01T09:15:02Z" },
-    "121": { "sha": "d05a7c3e91b48f26e0a3c5b7d9f2461a8c0e3b5f", "decision": "skipped", "via": "unrequested", "at": "2026-07-06T16:40:33Z" },
-    "123": { "sha": "4e8b02a7c95df1360a2b8c4d9e7f1053a6b2c8d0", "decision": "in_progress", "via": "requested", "at": "2026-07-08T13:20:47Z" }
-  }
-}
-```
-
-`sha` is the PR's `headRefOid` at decision time. `decision` is one of `reviewed`, `skipped`, `in_progress`; `via` records which step-4 query surfaced the PR. `at` is UTC ISO-8601 — write it with `date -u +%FT%TZ`, never local time: it feeds the step-2 staleness comparison, which must survive timezone changes.
-
-## Process
-
-### 1. Load file — interview on first run
-
-Read `.claude/gh-watch-reviews.local.json`.
-
-**If absent** (first run in this repo), build `config` via ONE `AskUserQuestion` call:
-
-1. Skip PRs authored by bots (dependabot, renovate, github-actions…)? — default yes
-2. Also surface PRs where review was NOT explicitly requested from the user (anything open they never reviewed, except their own)? — default yes
-3. Include draft PRs / extra author logins to always exclude? — multiSelect; "Other" collects free-text logins
-4. Housekeeping for the file this interview is about to create — it shouldn't be committed, so this is the moment to pick where to ignore it. Only if `git check-ignore -q .claude/gh-watch-reviews.local.json` exits non-zero: where to add the ignore entry — global gitignore (recommended, covers every repo; `git config --global core.excludesFile`, default `~/.config/git/ignore`) / repo `.gitignore` / repo `.git/info/exclude` / skip
-
-Write the file with the answers and empty `state`, apply the chosen gitignore entry, then continue.
-
-**If present** and args say `reconfigure`: same interview, overwrite `config` only.
-
-### 2. In-flight guard
-
-If any `state` entry has `decision: "in_progress"`, a review is already being worked in this session and this tick fired mid-review: **stop silently — produce no output at all.**
-
-Exception: if the `at` timestamp is older than 2 hours, ask the user whether a review is genuinely still running; on their confirmation that it is not, clear that entry and continue.
-
-### 3. Config awareness (once per session)
-
-On the first pass of this conversation session (skip on first run — the interview already showed the config), print exactly one compact line so the user knows what's being watched, e.g.:
-
-```
-gh-watch-reviews: watching owner/repo · bots excluded · drafts excluded · unrequested PRs on
-```
-
-Later ticks in the same session never repeat it.
-
-### 4. Discover candidates
-
-On the first pass of a session, preflight with `gh auth status`; if unauthenticated, tell the user to run `gh auth login` and stop.
-
-Run both searches (skip the second when `watch_unrequested` is false):
+1. On the first pass of this conversation session only: resolve the repo (`gh repo view --json nameWithOwner -q .nameWithOwner`) and Read `.claude/gh-watch-reviews.local.json`. If the file is absent, this is the first run — read references/setup.md and follow it (interview → write file). Otherwise: if any of `config.review_target`, `config.poll_interval_minutes`, `config.stale_review_hours` is missing (config from an older skill version), ask ONLY for those, in one `AskUserQuestion` call, using the wording in references/setup.md § The interview (questions 4–6), and write the answers into `config` before anything else. Then print exactly one compact line so the user knows what's being watched — with the real `owner/repo`, so resolve it before printing — e.g. `gh-watch-reviews: watching owner/repo · bots excluded · drafts excluded · unrequested PRs on`. Later passes in the same session skip this step entirely — no re-read, no repeated line; a quiet later tick is exactly one tool call (the scanner reads the file itself, and its "state file not found" error is the first-run signal if the file has vanished).
+2. Run the scanner — ONE Bash call:
 
 ```bash
-# explicit requests and re-requests — GitHub clears this when the user submits a review,
-# so reappearance here means the author re-requested: an intended re-review
-gh search prs --review-requested=@me --state open --repo <owner/repo> \
-  --json number,title,author,url,isDraft,createdAt --limit 50
-
-# PRs the user never reviewed, excluding their own
-gh search prs --state open --repo <owner/repo> \
-  --json number,title,author,url,isDraft,createdAt --limit 50 \
-  -- -reviewed-by:@me -author:@me
+bash "<skill-base-dir>/scripts/scan.sh" --once
 ```
 
-Run both searches in ONE combined Bash call, and append `date '+%F %T %Z'` to that same call so the pass captures an accurate check time (to the second) without an extra tool call — on a quiet tick this keeps the entire pass to a single tool call.
+3. Act on the JSON `status`:
 
-Guard the result before trusting it: if the combined call exits nonzero, or either search returns anything that isn't a JSON array (an auth/network failure, a rate-limit banner, an empty string), treat it as an error — emit one line `gh-watch-reviews: search failed — <reason>` and stop the tick. Never continue to dedup or the heartbeat on a failed or malformed search: a silent "nothing needs review" is the one outcome a watch must never produce from a failure.
+- `error` (exit 1) → emit exactly one line — `gh-watch-reviews: search failed — <message>` — and stop the pass. Never continue past a failure: a silent "nothing needs review" is the one outcome a watch must never produce from an error. The JSON's `retryable` says which kind it was: `true` is a network or GitHub blip — the next scheduled tick will simply try again, so say what failed and stop; `false` needs the user (auth above all), so say what it needs.
+- `in_review` → a review handed off earlier is still being worked and this tick fired mid-review: **stop silently — produce no output at all.**
+- `stale_in_progress` → an `in_progress` entry has held the in-flight lock longer than `config.stale_review_hours` and the scanner could not resolve it from GitHub (no submitted review, PR still open). Quote the returned `held_for_over_hours` — never a number of your own — and ask the user whether that review is genuinely still running; if not, remove the listed entries from `state` (Read → modify → Write) and re-run the pass from step 2.
+- `empty` → end the turn with exactly ONE compact heartbeat line and nothing else, using the returned `checked_at` verbatim (never invent, round, or approximate a timestamp): `gh-watch-reviews: owner/repo · no PRs need your review · checked <checked_at>`. This single line IS the entire quiet-tick deliverable — no second line, no summary of what was checked.
+- `candidates` → read references/candidates.md and process them as it directs.
 
-Union by PR number (remember which query matched — it becomes the "why"). Then filter out:
+Independently of `status`, if the JSON carries **`check_stale: true`**, a recurring check was set up in this repo and has not run for more than twice its interval — almost always because the session that owned it was closed, since the schedule lives in memory and leaves nothing behind. Add exactly one line after whatever the status called for, quoting the returned values: `gh-watch-reviews: recurring check (every <check_interval_minutes>m) hasn't run since <check_last_at> — run /gh-watch-reviews loop to start it again`. It is the one case where a quiet pass gets a second line, because silence from a check that stopped is indistinguishable from silence meaning "nothing to review" — which is the failure this skill exists to prevent.
 
-- `author.is_bot == true` when `exclude_bots`
-- `author.login` in `exclude_authors` or in an ad-hoc `exclude:` arg
-- `isDraft == true` unless `include_drafts` or ad-hoc `include-drafts`
+## Recurring mode
 
-### 5. Dedupe against state
-
-For each candidate with a `state[number]` entry — every rule except one needs no extra API call:
-
-- `reviewed` → suppress unless it matched the review-requested query (after a submitted review it can only reappear there, and a re-request is a deliberate human act — surface it as "re-requested after your review").
-- `skipped` → **skips are sticky.** Suppress every unrequested-query match, even if new commits arrived — new commits alone never resurface a skipped PR. Only a review-requested match resurfaces it ("review requested — previously skipped"), with one exception: when the entry is `via: "requested"`, fetch the current head (`gh pr view <n> --repo <owner/repo> --json headRefOid`) — the same `headRefOid` as recorded means the user already declined this exact request at this exact commit, stay suppressed; a different one means new commits, surface as "new commits since your last decision".
-
-Candidates without a state entry always surface. Fetch `headRefOid` only where the rule above demands it — surfaced candidates get their SHA at decision time (step 7), so a quiet tick fetches nothing. Prune `state` entries whose PRs are closed/merged when you're writing state anyway.
-
-### 6. Nothing to review → one heartbeat line
-
-Zero candidates after a successful search + dedup (step 4 already stopped the tick on any search failure, so reaching here means a real empty scan): **end the turn with exactly ONE compact heartbeat line and nothing else.** It carries the check time from step 4's `date` output, to the second, so a scrolled-back loop history shows the watch is alive and when it last looked:
+The cheap way to keep watching. Run step 1 of "One pass" to resolve the repo, then invoke the `loop` skill with **this body verbatim** — substituting only the real skill base directory and the interval (`config.poll_interval_minutes` minutes, or the one given in args):
 
 ```
-gh-watch-reviews: owner/repo · no PRs need your review · checked 2026-07-08 13:20:47 PDT
+Skill(skill="loop", args="15m Run this and nothing else: bash <skill-base-dir>/scripts/scan.sh --once
+Then: if the JSON has a \"line\", reply with exactly that line and nothing else. If \"status\" is \"candidates\", reply with one line per entry — `#<number> <title> (@<author>) — <why>` — then one final line: `run /gh-watch-reviews to start`. If \"status\" is \"stale_in_progress\", reply with one line naming the numbers in \"prs\" and the returned \"held_for_over_hours\", then `run /gh-watch-reviews`. Otherwise reply nothing.")
 ```
 
-Use the real timestamp from that tool output verbatim — never invent, round, or approximate one, and never omit it (an invented time is worse than none). This single line IS the entire quiet-tick deliverable: no second line, no summary of which queries ran or what was checked, and no text wrapped in tags — a `<system-reminder>`-style block you write yourself is ordinary output the user sees verbatim. One line, then stop.
+Then record that a check is meant to be running here — one Bash call — and say in one line what is being watched and how often. Convert an hour-form interval to minutes first (`1h` → `60`); `--mark-armed` accepts whole minutes only:
 
-### 7. Process candidates — one at a time
+```bash
+bash "<skill-base-dir>/scripts/scan.sh" --mark-armed <interval in whole minutes>
+```
 
-Sort oldest-first by `createdAt`. Every state write below records `via` (`"requested"` if the candidate matched the review-requested query, else `"unrequested"`) and `sha` — fetch it now if not already known: `gh pr view <n> --repo <owner/repo> --json headRefOid`.
+Without it nothing survives the session: the schedule is in memory, so once this session closes, a check that stopped looks exactly like one that was never set up. Every scan stamps the marker, so a running check stays fresh by itself.
 
-**Whether to ask before reviewing depends on the pass — this is decided per pass, not per PR:**
+Why the body is shaped like that, so nobody "improves" it into something expensive:
 
-- **First run in the repo** (the step-1 interview just ran this pass, so every candidate is pre-existing backlog the user never opted into): triage it so you don't auto-review history. For each candidate show one line — `#N — title — @author — <why: review requested / never reviewed>` — then `AskUserQuestion` (Review now / Skip / Stop watching) and act per the actions below. **This is the only pass that asks.**
-- **Every later pass** (the config file already existed when the pass started — any session, any `/loop` tick): a surfaced candidate is exactly what the watch exists to catch. **Start its review immediately — no `AskUserQuestion`.** Show the one-line `#N — …` for visibility, then run the **Review now** action directly. Auto-starting can't publish anything unattended: `pr-review`'s own gates still control drafting and delivery.
+- **The scanner returns `line`, ready to print.** A quiet tick is one Bash call and one echo — nothing for you to compose, and no timestamp to round, reformat or invent.
+- **This file is not part of the tick.** The tick never loads it — `disable-model-invocation: true` keeps this skill off the model's auto-invocation path, so a tick with work reports the PRs and hands back to the user, who starts the pass by typing `/gh-watch-reviews`. Re-injecting this file every tick is what made the old `/loop /gh-watch-reviews` form cost ~4.4k tokens a tick; this one measures ~950.
+- **Nothing starts without the user typing the command.** A pass writes config, a gitignore entry, and — depending on `config.review_target` — launches reviews, so it never begins from the model's own judgement about context.
+- **A failed check needs no special handling.** The tick reports it and the next tick simply runs — which is why this form shrugs off the scan that fires after the machine wakes, before Wi-Fi is back.
 
-Actions:
-
-- **Review now** →
-  1. Write `state[number] = {sha, decision: "in_progress", via, at: now}` to the file BEFORE anything else — this is what makes a mid-review loop tick no-op (step 2).
-  2. `Skill(skill="pr-review", args="<PR URL>")`. Its gates handle drafting and approval; post nothing outside it. If the handoff fails to start — `pr-review` isn't installed and the user declines the install, or the install fails — remove the `in_progress` entry immediately and move to the next candidate: a failed start must never leave the PR locked for step 2's two-hour window.
-  3. When the review is submitted, flip the entry to `decision: "reviewed"` (same sha). If the user aborted the review, remove the entry (so it resurfaces) or mark `skipped` if they say so.
-  4. **Immediately re-run discovery** (steps 4–5): PRs that appeared while reviewing are handled now, same flow. Only an empty re-scan ends the pass.
-- **Skip** (first-run triage only) → write `{sha, decision: "skipped", via, at: now}`; next candidate. (Sticky: see step 5 — the PR returns only on an explicit review request, or on new commits if this skip declined an explicit request.)
-- **Stop watching** (first-run triage only) → stop processing; remind the user the `/loop` is still running and how to stop it.
+Its one limit: the schedule is in-memory and belongs to the session that created it, so closing Claude Code ends it and it has to be set up again.
 
 ## Notes
 
-- Two loops watching the same repo are unsupported — the state file has no locking; last write wins.
-- Ad-hoc args never persist; only the step-1 interview writes `config`.
-- Don't shortcut the state writes: the file on disk IS the dedup mechanism across ticks and sessions — an intention to write it later does not survive a loop tick.
+- Two recurring checks on the same repo are unsupported — the state file has no locking; last write wins.
+- Nothing checks while Claude Code is not running, and nothing here is a daemon. That costs nothing real — no review can happen then either. Polling that continues with no session at all is a launchd agent, not this skill.
+- Ad-hoc args never persist; only the setup interview writes `config`.
+- State semantics, the interview, and candidate handling live in references/ — read them when the pass needs them, not preemptively.

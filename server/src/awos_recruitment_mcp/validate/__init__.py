@@ -22,10 +22,10 @@ from awos_recruitment_mcp.models import (
 # local docs even though it's not bundled. Type is enforced alongside name —
 # e.g. a file named "references" or a directory named "SKILL.md" is still
 # rejected, since the bundler would drop them for the same reason as any other
-# stray entry. The scripts/ directory only allows .js, .ts, .py files.
+# stray entry. The scripts/ directory only allows .js, .ts, .py, .sh files.
 _ALLOWED_SKILL_FILES: frozenset[str] = frozenset({"SKILL.md", "README.md"})
 _ALLOWED_SKILL_DIRS: frozenset[str] = frozenset({"references", "scripts"})
-_ALLOWED_SCRIPT_EXTENSIONS: frozenset[str] = frozenset({".js", ".ts", ".py"})
+_ALLOWED_SCRIPT_EXTENSIONS: frozenset[str] = frozenset({".js", ".ts", ".py", ".sh"})
 
 # Hooks must stay pure POSIX sh with zero runtime dependencies (see
 # registry/hooks/CLAUDE.md) — helper scripts included. Skills keep the
@@ -243,7 +243,7 @@ def validate_skills(registry_path: Path) -> list[ValidationResult]:
                         )
                     )
                     continue
-                # scripts/ only allows .js, .ts, .py files.
+                # scripts/ only allows the extensions in the allowlist above.
                 if child.name == "scripts":
                     if ref_child.suffix not in _ALLOWED_SCRIPT_EXTENSIONS:
                         errors.append(

@@ -66,6 +66,12 @@ htmlcov/
 
 .serena
 
+# Locally installed skills — the canonical copies live in registry/skills/
+.claude/skills/
+
+# Local-mode review drafts and comment plans (pr-review, pr-comments-address)
+review/
+
 .terraform/
 *.tfstate
 *.tfstate.backup
