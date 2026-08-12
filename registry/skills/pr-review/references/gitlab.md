@@ -25,6 +25,8 @@ IID=<MR_IID>
 MR_URL="https://$HOST/<GROUP>/<PROJECT>"                  # -R accepts a full URL; use it for the porcelain
 ```
 
+**Never name a shell variable `path`.** These recipes pass file paths around, and in zsh — the default shell here — `path` is the array form of `PATH`, tied to it. `local path="src/api/iso.ts"` therefore replaces the command search path with one nonexistent directory, and every external binary disappears for the rest of that function: `command not found: cat`, `: glab`. It reads as a broken environment rather than a naming collision, so the usual reflex — hardcoding `/bin/cat` — fixes the symptom and leaves `glab` still failing. Use `file_path`. Same trap for `cdpath`, `fpath`, `manpath`, and `status`.
+
 **Pin the host explicitly — `glab` never infers it from the MR you were given.** Every `glab` command resolves its instance from the current git remote, `GITLAB_HOST`, or the saved config, so running in a directory whose remote points elsewhere (or nowhere) silently targets the wrong GitLab — and this skill's `preflight` deliberately doesn't clone, so there's often no matching remote at all. `export GITLAB_HOST="$HOST"` covers all of it: `glab api`, `glab auth status`, and the porcelain (`mr view`, `mr diff`, `mr approve`, `mr note`), which have **no `--hostname` flag** — only `-R`. Belt and braces: pass `--hostname "$HOST"` on `glab api`/`glab auth status` and `-R "$MR_URL"` on the porcelain, both shown in the recipes below.
 
 ## Transport: glab first, MCP as fallback
@@ -173,6 +175,7 @@ glab api -X POST "projects/$PROJECT/merge_requests/$IID/draft_notes" \
   --form 'position[new_line]=42'
 ```
 
+- **`position[...]` must go via `--form`. Sending it with `-f` silently discards it.** `-f/--raw-field` builds a JSON body, and GitLab only reads the bracketed position params form-encoded — so with `-f` the call returns **HTTP 201, exit 0**, and the note lands **unanchored at MR level with `position: null`**. There is no error to catch: it looks like a clean success and the author sees a top-level comment with no idea which line it means. This has happened on a live MR; four notes had to be deleted and reposted.
 - `new_line` is the line in the MR's head version. For a line that only exists before the change (a deletion), send `position[old_line]` instead; for a line present in both, sending both is safest.
 - `old_path` is required even when the file wasn't renamed — set it equal to `new_path`.
 - **Multi-line findings degrade to single-line.** GitLab anchors ranges with `position[line_range][start|end][line_code]`, where a line code is a per-file hash the API doesn't hand you directly. Don't fabricate one: anchor the comment at the range's most relevant line and describe the span in the comment text ("lines 10–14 …").
@@ -185,6 +188,16 @@ glab api -X POST "projects/$PROJECT/merge_requests/$IID/draft_notes" \
 ```
 
 `bulk_publish` also accepts a summary at submit time (see below) — but the user, not you, runs the submit, so the positionless draft note is what actually guarantees the summary reaches the MR. Post it here, and still print the verbatim summary in step 7. **Once it exists, don't also pass `note=` to `bulk_publish`** — that would post the same text a second time as a separate summary note.
+
+**Verify anchoring, not just arrival.** A count check can't see the failure above, because the mis-delivered notes are still *there* — just detached. Re-read what you posted and assert every inline note has a non-null `position.new_path` and `position.new_line`:
+
+```sh
+glab api "projects/$PROJECT/merge_requests/$IID/draft_notes" | jq -r '
+  .[] | select(.note != null)
+  | "\(if .position.new_path == null then "UNANCHORED" else "ok" end)  \(.position.new_path // "-"):\(.position.new_line // "-")  \(.id)"'
+```
+
+Anything reading `UNANCHORED` that wasn't meant to be the summary was mis-delivered — fix it before telling the user delivery succeeded.
 
 After creating, confirm the drafts landed — re-run `find-pending-review` and check the count is `BASELINE + <findings> + 1` for the summary note. It is not equal to what you posted: pre-existing drafts are appended to, never replaced, so comparing against the posted count alone reports a phantom failure for any user who had drafts of their own. Report the count to the user with the MR URL; GitLab shows pending drafts in the MR's **Changes** tab, and publishing is a button there ("Submit review"), or:
 
@@ -232,7 +245,7 @@ That difference matters. Drafts are atomic — the user submits them as one revi
 1. Keep a **posted / remaining** list as you go, and post the findings before the summary.
 2. **Stop at the first failure** — don't continue down the list. A partial review is a state to escape, not to extend.
 3. Fold every unposted finding **verbatim** into the summary note, so nothing approved at the gate is silently dropped.
-4. Post the summary on **both** paths, success and abort, with `BODY=$(cat <summary-file>)` and `glab mr note $IID -R "$MR_URL" -m "$BODY"` — on the abort path it's what tells the author the review is incomplete and why.
+4. Post the summary on **both** paths, success and abort, with `BODY=$(cat <summary-file>)` and `glab mr note create $IID -R "$MR_URL" -m "$BODY"` — on the abort path it's what tells the author the review is incomplete and why.
 5. Verify the count of posted discussions against the approved set, the same check `create-draft-review` does, and report any shortfall to the user explicitly.
 
 ## reply-to-thread
@@ -266,6 +279,8 @@ Don't resolve other people's discussions — you're the reviewer, not the author
 | First draft POST 403s after a passing probe | The probe only proved read access. Treat it as `DRAFTS=no`, return to the gate with the publish-now / file-only choice, and don't retry the drafts. |
 | `find-pending-review` returns rows | Drafts already exist and may be the user's. Append, never delete — and tell them first, since `bulk_publish` will publish theirs too. |
 | Draft/discussion POST 400 "Note position is invalid" | The SHAs are stale or the line isn't in the diff. Refetch `diff_refs` and retry once; if it still fails, move the finding into the summary rather than dropping it. |
+| POST returned 201 but the note has `position: null` | The position went out via `-f` instead of `--form` and was discarded — no error is raised. Repost with `--form`; the detached note has to be deleted, so ask the user first. |
+| `command not found` for a binary that plainly exists (`cat`, `glab`) | A shell variable named `path` clobbered `PATH` (zsh ties them). Rename it to `file_path` — don't paper over it with absolute binary paths, which leaves every unqualified command still broken. |
 | Draft/discussion POST 400 on `line_range` | Multi-line anchoring — degrade to a single-line comment and describe the span in the text. |
 | `bulk_publish` rejects `reviewer_state=requested_changes` | Not available on this tier or version. Retry with `reviewed` and put the verdict in the summary text. |
 | `glab mr approve` → "cannot approve your own merge request" | You're the author; drop the approve and publish with `reviewer_state=reviewed`. |
