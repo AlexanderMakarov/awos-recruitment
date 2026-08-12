@@ -2,6 +2,7 @@
 name: gh-watch-reviews
 description: Use when the user wants to watch the current GitHub repo for pull requests that need their review — new PRs, explicit review requests, re-requests after new commits — e.g. "watch for incoming reviews", "check PRs needing my review", or to set up a recurring check. GitHub-only (gh CLI). Not for reviewing one specific known PR (invoke pr-review directly).
 argument-hint: "[loop [interval] | reconfigure | exclude: <login>, ... | include-drafts]"
+disable-model-invocation: true
 ---
 
 <!-- Deliberately NOT `context: fork`: this skill needs AskUserQuestion and the Skill tool, which forked/subagent skills cannot use (same constraint as pr-review). -->
@@ -44,7 +45,7 @@ bash "<skill-base-dir>/scripts/scan.sh" --once
 - `empty` → end the turn with exactly ONE compact heartbeat line and nothing else, using the returned `checked_at` verbatim (never invent, round, or approximate a timestamp): `gh-watch-reviews: owner/repo · no PRs need your review · checked <checked_at>`. This single line IS the entire quiet-tick deliverable — no second line, no summary of what was checked.
 - `candidates` → read references/candidates.md and process them as it directs.
 
-Independently of `status`, if the JSON carries **`check_stale: true`**, a recurring check was set up in this repo and has not run for more than twice its interval — almost always because the session that owned it was closed, since the schedule lives in memory and leaves nothing behind. Add exactly one line after whatever the status called for, quoting the returned values: `gh-watch-reviews: recurring check (every <check_interval_minutes>m) hasn't run since <check_last_at> — say "loop" to start it again`. It is the one case where a quiet pass gets a second line, because silence from a check that stopped is indistinguishable from silence meaning "nothing to review" — which is the failure this skill exists to prevent.
+Independently of `status`, if the JSON carries **`check_stale: true`**, a recurring check was set up in this repo and has not run for more than twice its interval — almost always because the session that owned it was closed, since the schedule lives in memory and leaves nothing behind. Add exactly one line after whatever the status called for, quoting the returned values: `gh-watch-reviews: recurring check (every <check_interval_minutes>m) hasn't run since <check_last_at> — run /gh-watch-reviews loop to start it again`. It is the one case where a quiet pass gets a second line, because silence from a check that stopped is indistinguishable from silence meaning "nothing to review" — which is the failure this skill exists to prevent.
 
 ## Recurring mode
 
@@ -52,7 +53,7 @@ The cheap way to keep watching. Run step 1 of "One pass" to resolve the repo, th
 
 ```
 Skill(skill="loop", args="15m Run this and nothing else: bash <skill-base-dir>/scripts/scan.sh --once
-Then: if the JSON has a \"line\", reply with exactly that line and nothing else. If \"status\" is \"candidates\" or \"stale_in_progress\", invoke the gh-watch-reviews skill and follow it. Otherwise reply nothing.")
+Then: if the JSON has a \"line\", reply with exactly that line and nothing else. If \"status\" is \"candidates\", reply with one line per entry — `#<number> <title> (@<author>) — <why>` — then one final line: `run /gh-watch-reviews to start`. If \"status\" is \"stale_in_progress\", reply with one line naming the numbers in \"prs\" and the returned \"held_for_over_hours\", then `run /gh-watch-reviews`. Otherwise reply nothing.")
 ```
 
 Then record that a check is meant to be running here — one Bash call — and say in one line what is being watched and how often:
@@ -66,7 +67,8 @@ Without it nothing survives the session: the schedule is in memory, so once this
 Why the body is shaped like that, so nobody "improves" it into something expensive:
 
 - **The scanner returns `line`, ready to print.** A quiet tick is one Bash call and one echo — nothing for you to compose, and no timestamp to round, reformat or invent.
-- **This file is not part of the tick.** It loads only when a tick actually has work (`candidates` / `stale_in_progress`). Re-injecting it every tick is what made the old `/loop /gh-watch-reviews` form cost ~4.4k tokens a tick; this one measures ~950.
+- **This file is not part of the tick.** The tick never loads it — `disable-model-invocation: true` keeps this skill off the model's auto-invocation path, so a tick with work reports the PRs and hands back to the user, who starts the pass by typing `/gh-watch-reviews`. Re-injecting this file every tick is what made the old `/loop /gh-watch-reviews` form cost ~4.4k tokens a tick; this one measures ~950.
+- **Nothing starts without the user typing the command.** A pass writes config, a gitignore entry, and — depending on `config.review_target` — launches reviews, so it never begins from the model's own judgement about context.
 - **A failed check needs no special handling.** The tick reports it and the next tick simply runs — which is why this form shrugs off the scan that fires after the machine wakes, before Wi-Fi is back.
 
 Its one limit: the schedule is in-memory and belongs to the session that created it, so closing Claude Code ends it and it has to be set up again.
