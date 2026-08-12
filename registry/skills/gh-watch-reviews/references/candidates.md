@@ -1,6 +1,6 @@
 # Processing candidates
 
-Read this when a scan returned `status: "candidates"`. The scanner already filtered, deduped, and sorted oldest-first — process the list in the given order, one at a time.
+Applies when a scan returned `status: "candidates"`. The scanner already filtered, deduped, and sorted oldest-first — process the list in the given order, one at a time.
 
 Every state write below is Read → modify → Write of `.claude/gh-watch-reviews.local.json` — always read the file from disk first (another write may have happened since you last saw it, including by the scanner itself), and write immediately: the file on disk IS the dedup mechanism across ticks and sessions; an intention to write it later does not survive a loop tick. Each entry records the candidate's `why` origin as `via` (`"requested"` for "review requested" / "re-requested…" / "…previously skipped" / "new commits…", else `"unrequested"`), `sha` — fetch it at decision time: `gh pr view <n> --repo <owner/repo> --json headRefOid` — and `at`, which is ALWAYS the verbatim output of `date -u +%FT%TZ` (UTC ISO-8601, e.g. `2026-07-28T13:24:21Z`): the scanner parses it for staleness and completion detection, and any other format makes the entry go stale instantly.
 

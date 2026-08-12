@@ -56,7 +56,7 @@ Skill(skill="loop", args="15m Run this and nothing else: bash <skill-base-dir>/s
 Then: if the JSON has a \"line\", reply with exactly that line and nothing else. If \"status\" is \"candidates\", reply with one line per entry — `#<number> <title> (@<author>) — <why>` — then one final line: `run /gh-watch-reviews to start`. If \"status\" is \"stale_in_progress\", reply with one line naming the numbers in \"prs\" and the returned \"held_for_over_hours\", then `run /gh-watch-reviews`. Otherwise reply nothing.")
 ```
 
-Then record that a check is meant to be running here — one Bash call — and say in one line what is being watched and how often:
+Then record that a check is meant to be running here — one Bash call — and say in one line what is being watched and how often. Convert an hour-form interval to minutes first (`1h` → `60`); `--mark-armed` accepts whole minutes only:
 
 ```bash
 bash "<skill-base-dir>/scripts/scan.sh" --mark-armed <interval in whole minutes>

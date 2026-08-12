@@ -1,6 +1,6 @@
 # First-run setup and the per-repo file
 
-Read this only when `.claude/gh-watch-reviews.local.json` is absent (first run in this repo) or args say `reconfigure`.
+Applies on first run in a repo — `.claude/gh-watch-reviews.local.json` absent — or when args say `reconfigure`.
 
 ## The file
 
