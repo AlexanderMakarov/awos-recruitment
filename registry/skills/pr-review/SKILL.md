@@ -7,7 +7,7 @@ description: Use when authoring a code review of a pull request or merge request
 
 # Author a Code Review
 
-Produce a code review that reads like a sharp human wrote it and opens a conversation. You draft, the user steers, the user approves before anything is posted or saved.
+Produce a code review that reads like a sharp human wrote it and opens a conversation. You draft, the user steers, the user approves before anything is posted or delivered.
 
 ## Modes
 
@@ -93,7 +93,7 @@ No severity badges, plain citations. Order by what matters, explained in words. 
 
 - **request changes** — it changes what the code does on a path that runs normally, or it loses data, corrupts state, or opens a security hole. Rarity doesn't rescue those: a one-in-a-million path that corrupts data still blocks.
 - **approve** — nothing major remains. A finding is *not* major when it is confined to code that runs only in rare situations **and** its worst outcome is limited to visibility — log fields, alert payloads, diagnosability — or to performance. Docs, comments and test hygiene never block on their own.
-- **comment** — the residue: a real defect on an ordinary path that isn't severe enough to block, or a question whose answer could change the design. If you're reaching for comment because approving *feels* presumptuous, that's not a reason — apply the rule.
+- **comment** — the residue: a real defect that isn't severe enough to block — an ordinary-path defect with contained impact, or a wrong user-visible result confined to a rare path (rarity caps the cost, so it doesn't block; but a wrong result is more than visibility, so it doesn't fold into approve either) — or a question whose answer could change the design. If you're reaching for comment because approving *feels* presumptuous, that's not a reason — apply the rule.
 
 Holding a PR open over log-field quality and comment accuracy costs more in cycle time than those findings cost in risk — and it costs most on a late round, where the remainder is nearly always visibility and hygiene. Approving is a statement about the verdict, never a reason to drop or soften a finding: post them all, and say plainly in the summary why you're approving anyway. This is the verdict *intent* either way — the user picks the verdict at delivery.
 
@@ -136,7 +136,7 @@ A request to change something approves the **action**, never the **wording** —
 
 ## Boundaries
 
-- Never post, submit, or save anything the user hasn't approved at the results gate — including every amendment made after delivery.
+- Never post, submit, or deliver anything the user hasn't approved at the results gate — including every amendment made after delivery. The step 4 draft file in `review/` is a working artifact, not delivery: writing it before the gate is required, because it's what the gate presents.
 - Never write the review as if you executed anything. This skill reads code; it doesn't run it, so "I tried", "I couldn't reproduce" and "I went looking" are always false here.
 - Never narrate the review inside the review — method notes, what you read, and coverage caveats go to the user in step 7, not to the author on the platform.
 - Never author an engine's findings yourself. An engine that reports nothing has failed; say so and degrade, rather than reconstructing its output and passing it to triage as engine input.
