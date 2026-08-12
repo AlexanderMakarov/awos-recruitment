@@ -14,10 +14,8 @@
 ## Voice
 
 - Talk to the author, not about them — address them and what to do, don't narrate the code in the third person. "Want to cap this? It retries forever if the host stays down" speaks to the author; "The retry loop lacks a bound" is a verdict about the code. Same finding, but the first opens a conversation.
-- **Name the defect before the mechanism.** Open with what is wrong, then explain how it happens. Describing the machinery and leaving the author to infer the problem is the single most common way these reviews fail — it reads as erudite and communicates nothing.
-- Lead with the problem and its consequence, then offer the fix as a suggestion. The author owns the code.
-- Be specific and short. One concrete sentence about what breaks and when beats a paragraph of hedging.
-- **One claim per sentence.** Short is not the same as dense. Welding what-it-does, a verdict, three mechanism names and a compliment into one sentence produces something the author has to decompress before they can act on it — and "be specific and short" is not licence to do it. Split them, even at the cost of more lines.
+- **Name the defect before the mechanism.** Open with what is wrong and what it costs, then explain how it happens, then offer the fix as a suggestion — the author owns the code. Describing the machinery and leaving the author to infer the problem is the single most common way these reviews fail — it reads as erudite and communicates nothing.
+- **Be specific and short — one claim per sentence.** One concrete sentence about what breaks and when beats a paragraph of hedging. But short is not the same as dense: welding what-it-does, a verdict, three mechanism names and a compliment into one sentence produces something the author has to decompress before they can act on it. Split the claims, even at the cost of more lines.
 - Show uncertainty when you have it: "I might be missing context, but…" invites the discussion that's the point of a review.
 - Match the repo's register — mirror the tone of the existing human comments rather than importing a house accent.
 
@@ -25,20 +23,20 @@
 
 Four failures, each caught in real use, each invisible to the model that wrote them:
 
-- **Never imply you ran anything.** This skill is a read: its Boundaries forbid running builds, tests, or lint, so a review can never honestly claim runtime verification. "I went looking for a way to re-run a finished job and couldn't find any", "I couldn't reproduce", "I tried" — all describe an investigation that did not happen. Say what the code does, not what you did to it.
+- **Never claim an investigation that didn't happen.** By default this skill is a read, so "I went looking for a way to re-run a finished job and couldn't find any", "I couldn't reproduce", "I tried" describe work that never occurred. When the session genuinely did run something — tests, CI, a scratch reproduction — report exactly what ran and what it showed, and claim nothing beyond that. The line is between reporting an execution that happened and borrowing the authority of one that didn't.
 - **Don't write about the review.** No method statements, no "this is a code read", no list of which files you looked at, no restatement of the diff. The author knows what they wrote and how a review works; every such line spends their attention on you rather than on their code. Coverage caveats and limitations go in the step 7 chat summary, where they inform the user — never in the posted text.
 - **Don't tell the author their own work is good in detail.** Confirming that guards they wrote do hold, or itemising what's correct, is filler dressed as diligence. One honest overall line, then the problems.
 - **Don't over-correct into coldness.** Cutting the general opening and starting on the first bug is not "focused", it's rude — see below.
 
 ## The opening
 
-Every review opens with two things, in order: what the MR does, and your overall read of it. One or two lines. This is not filler and it is not optional — arriving with a bug and no context reads as a drive-by.
+Every review opens with two things, in order: what the PR does, and your overall read of it. One or two lines. This is not filler and it is not optional — arriving with a bug and no context reads as a drive-by.
 
-The distinction that matters: an opening about **the MR** is what you owe the author — what this change does, and how close it is. An opening about **your process** is noise — what you read, how you checked, what you couldn't check. Write the first kind, never the second.
+The distinction that matters: an opening about **the PR** is what you owe the author — what this change does, and how close it is. An opening about **your process** is noise — what you read, how you checked, what you couldn't check. Write the first kind, never the second.
 
 Plain acknowledgement of good work belongs here and is **not** the performative praise banned above. The test is whether the sentence could only have been written about *this* change: "Great PR!" fits anything, so it's performative; naming the specific thing that was done well is a judgment the author can use.
 
-**Write the opening from this MR's own facts, and never carry one over from another review.** Every opening below is an illustration of *shape*, not a phrase to reuse — there is no house opener, and a first line that would fit any PR is filler no matter how warm it sounds. If your opening doesn't name something only this change did, you haven't written one yet.
+**Write the opening from this PR's own facts, and never carry one over from another review.** Every opening below is an illustration of *shape*, not a phrase to reuse — there is no house opener, and a first line that would fit any PR is filler no matter how warm it sounds. If your opening doesn't name something only this change did, you haven't written one yet.
 
 ## Pushback and discussion
 
@@ -65,6 +63,10 @@ Keep it free of filler. Don't grade the code's shape — "structure is sound", "
 
 These illustrate the voice — they aren't a checklist of specific issues to look for.
 
+### Avoid → prefer
+
+Each pairing is one finding written twice; the avoid and the prefer only make sense side by side, so they stay paired here rather than sorted into separate lists.
+
 **Inline finding — avoid (report style):**
 
 > ### HIGH | `src/worker.ts:142` | Unbounded retry
@@ -73,6 +75,34 @@ These illustrate the voice — they aren't a checklist of specific issues to loo
 **Inline finding — prefer (house voice):**
 
 > This retry loop has no ceiling — if the downstream is down it spins until the request times out, and every worker doing the same turns an outage into a thundering herd. Worth a max-attempts cap with backoff.
+
+**Mechanism-first — avoid.** Every one of these came back from a real review with "what does this mean?":
+
+> This PR makes 2013 durable on every job record.
+
+**Defect-first — prefer.** Same finding, opened with what's actually wrong:
+
+> Wrong ISO version. This defaults every submission to ISO 27001:2013; the standard was settled as 2022 two days before this PR, and the 2022 revision restructured Annex A — so jobs submitted now run against the wrong clause inventory.
+
+**Compressed — avoid.** Five things welded together (what it does, a scope claim, a verdict, four mechanism names, and praise), none signposted:
+
+> Makes ISO an unattended assessment type on its own lane — submit → dedicated FIFO queue → standalone worker → pipeline → report by run-ID — with the FRA flow untouched by construction. The failure semantics hold up under reading: the terminal-job re-run guard, the COMPLETED-never-demoted guard, the not-found-vs-transient split in load_job, the in-worker capacity wait.
+
+**Decompressed — prefer.** One claim per line, and the mechanism names dropped entirely — they belong in the inline findings, not the summary:
+
+> An unattended ISO lane that runs end to end, and the failure handling has clearly been through several passes. It's close.
+>
+> Two bugs got past, both in `_handle_message`, and both lose a job.
+
+**Claiming an investigation you didn't run — avoid** (no prefer half — the fix is deletion):
+
+> I went looking for ways to re-run a finished job or demote a saved one and couldn't find any — those guards hold.
+
+Nothing was executed; this was a code read. It also tells the author their own guards work, which they know. Cut the sentence — don't rewrite it as "I read the code and…", which is the process narration banned above.
+
+### Shapes to copy
+
+Everything below is a do. Copy the shape, never the words — each names something only its own PR did.
 
 **Engaging an existing thread:**
 
@@ -86,39 +116,19 @@ These illustrate the voice — they aren't a checklist of specific issues to loo
 
 > This new `RetryPolicy` has only the one caller it ships with, and the description says it's "for reuse later". I'd hold off on the abstraction until a second caller exists — it's easier to shape right once you can see both call sites. If there's already a concrete second consumer lined up, ignore me.
 
-**Mechanism-first — avoid.** Every one of these came back from a real review with "what does this mean?":
-
-> This MR makes 2013 durable on every job record.
-
-**Defect-first — prefer.** Same finding, opened with what's actually wrong:
-
-> Wrong ISO version. This defaults every submission to ISO 27001:2013; the standard was settled as 2022 two days before this MR, and the 2022 revision restructured Annex A — so jobs submitted now run against the wrong clause inventory.
-
-**Compressed — avoid.** Five things welded together (what it does, a scope claim, a verdict, four mechanism names, and praise), none signposted:
-
-> Makes ISO an unattended assessment type on its own lane — submit → dedicated FIFO queue → standalone worker → pipeline → report by run-ID — with the FRA flow untouched by construction. The failure semantics hold up under reading: the terminal-job re-run guard, the COMPLETED-never-demoted guard, the not-found-vs-transient split in load_job, the in-worker capacity wait.
-
-**Decompressed — prefer.** One claim per line, and the mechanism names dropped entirely — they belong in the inline findings, not the summary:
-
-> An unattended ISO lane that runs end to end, and the failure handling has clearly been through several passes. It's close.
->
-> Two bugs got past, both in `_handle_message`, and both lose a job.
-
-**Openings vary with the change — copy the shape, not the words.** Three from different reviews, none of them a template:
+**Openings vary with the change.** Three from different reviews, none of them a template:
 
 > Straightforward queue swap, and the migration path is the part I'd have worried about — it's handled. One thing to sort out before merge.
 
+<!-- -->
+
 > This does what the ticket asked and the tests are the right ones. I've got a question about the retry semantics that might change the design, so worth reading that one first.
+
+<!-- -->
 
 > Big change, and splitting the schema migration into its own commit made it reviewable — thanks for that. Two blockers and a handful of smaller notes.
 
-Each names something only that PR did. None opens with the same words, and none would survive being pasted onto a different PR — which is the test.
-
-**Claiming an investigation you didn't run — avoid:**
-
-> I went looking for ways to re-run a finished job or demote a saved one and couldn't find any — those guards hold.
-
-Nothing was executed; this is a code read. It also tells the author their own guards work, which they know. Cut the sentence — don't rewrite it as "I read the code and…", which is the process narration banned above.
+None opens with the same words, and none would survive being pasted onto a different PR — which is the test.
 
 **Summary body:**
 
