@@ -56,6 +56,10 @@ Three engines, and only three: the `code-review` plugin, the applicable `pr-revi
 
 **Bound each engine.** Changed files plus one hop of context, then report. An unbounded agent will happily run over a hundred turns at full context and cost more on its own than an entire disciplined run.
 
+**Engines read the repo, not the network.** Verification inside an engine means the code, the diff, and the repo's own artifacts — `Read` the file, `Grep` the sibling module, open the test that covers it. Fetching documentation or searching the web is latency-bound rather than token-bound, so the cost never shows up as tokens; it shows up as the engine phase running two or three times longer, on the critical path, before the user has seen a single finding. Two engines doing it can add ten minutes to a review between them.
+
+When a finding genuinely can't be settled from the repo — an API that may not exist, a spec version, an upstream default — don't fetch it. Return the finding with the open question attached and its confidence lowered, marked as needing external evidence. Step 5's "Back findings with external sources" is where that check belongs: by then the user has read the finding and can decide whether it's worth the wait. Most findings never need it, and the ones that do should get it on request rather than by default.
+
 **Hand context over by path, not inline.** Write the diff and the PR context to one scratchpad file and give each agent the path plus its scope line. An agent handed them inline pays to rebuild that prompt in its own cache, and at 84–255k per agent across a dozen agents that is the largest avoidable cost after the model choice.
 
 ## Collecting the engines' results
@@ -74,7 +78,7 @@ Prose alone has proven unable to hold this rule, so it carries a check with an a
 
 ## Merge and carry forward
 
-Combine both engines into one findings list and dedupe by file, line, and substance (the two engines will overlap — e.g. both may flag a real bug). Prefer the more specific phrasing. For each surviving finding keep: file, line, what, why, suggested fix, a confidence read (use the code-review plugin's score when present, otherwise judge from how decisively the specialized agent verified it), and the source. Confidence and source feed the house-style ordering and the verdict reason back in the SKILL workflow.
+Combine every engine that ran into one findings list and dedupe by file, line, and substance (they overlap — two engines may flag the same real bug). Prefer the more specific phrasing. For each surviving finding keep: file, line, what, why, suggested fix, a confidence read (use the code-review plugin's score when present, otherwise judge from how decisively the specialized agent verified it), the source, and whether it was marked as needing external evidence — that mark is what the gate's optional evidence pass works from, so losing it in the merge means the check silently never happens. Confidence and source feed the house-style ordering and the verdict reason back in the SKILL workflow.
 
 ## False-positive discipline
 
