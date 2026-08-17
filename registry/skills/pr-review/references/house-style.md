@@ -15,9 +15,12 @@
 
 - Talk to the author, not about them — address them and what to do, don't narrate the code in the third person. "Want to cap this? It retries forever if the host stays down" speaks to the author; "The retry loop lacks a bound" is a verdict about the code. Same finding, but the first opens a conversation.
 - **Name the defect before the mechanism.** Open with what is wrong and what it costs, then explain how it happens, then offer the fix as a suggestion — the author owns the code. Describing the machinery and leaving the author to infer the problem is the single most common way these reviews fail — it reads as erudite and communicates nothing.
-- **Be specific and short — one claim per sentence.** One concrete sentence about what breaks and when beats a paragraph of hedging. But short is not the same as dense: welding what-it-does, a verdict, three mechanism names and a compliment into one sentence produces something the author has to decompress before they can act on it. Split the claims, even at the cost of more lines.
+- **Spend the reader's effort, not your word count.** Prose read once beats shorter prose read three times. Reaching for brevity by packing more into each sentence — stacked clauses, unexplained domain terms, three ideas joined by semicolons — buys nothing: the author pays the difference back decompressing it, and that is the most common complaint these reviews get. One idea per sentence, plain words, and as many sentences as the idea needs.
+- **Trace it when one sentence won't carry it.** If the author can't get from your first sentence to why it matters, walk the path: a concrete input, what the code does with it, and what that costs. "If `status` arrives empty, the branch at line 40 falls through and the job is marked done without ever running." Skip the trace when the finding is self-evident — a typo doesn't need a story. And a finding you can't trace to a real input and a real consequence is one you haven't verified: drop it, or ask instead of asserting.
 - Show uncertainty when you have it: "I might be missing context, but…" invites the discussion that's the point of a review.
 - Match the repo's register — mirror the tone of the existing human comments rather than importing a house accent.
+
+A project can tune trace depth through `## How findings read` in its [review policy](review-policy.md) — but not the density floor above. "Be terse" doesn't produce a shorter review, it produces a denser one, which is the failure these two rules exist to prevent.
 
 ## What never goes in a posted review
 
@@ -58,6 +61,8 @@ A short paragraph or two: what the PR does, your overall read (close, or real bl
 Draw the PR's purpose from its description and the discussion, not from the diff. The diff shows what changed, not why the author set out to change it; reconstructing intent from the code alone is how a summary ends up confidently describing the wrong goal.
 
 Keep it free of filler. Don't grade the code's shape — "structure is sound", "the wiring is clean", "well organized" is noise that reads as padding. Name a genuine strength plainly if there is one, otherwise go straight to the concerns.
+
+State the verdict's reason in the same concrete terms — not a count, not a label. "Two blockers" tells the author nothing they can act on. "Errors surface on the happy path" and "a database failure reaches the user as a valid value" tell them what merging would cost. If you're approving with findings still open, say what makes them safe to merge.
 
 ## Examples
 

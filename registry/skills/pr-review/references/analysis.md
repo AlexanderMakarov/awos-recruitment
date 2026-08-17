@@ -32,6 +32,16 @@ The `pr-review-toolkit` plugin provides specialized review agents that go deeper
 
 Give each agent the context its dimension needs, not just the diff: `pr-test-analyzer` can't judge coverage gaps without the existing tests, and `comment-analyzer` needs the surrounding code to tell an outdated comment from a correct one. (These agents carry their own descriptions and system prompts — this skill selects them and feeds them scope; it doesn't re-prompt them.) Run the applicable agents in parallel. Each returns its own findings; treat them as high-signal for their dimension but still subject to the discipline below.
 
+## Engine 3: project rules (only when the policy defines them)
+
+When the base-branch `.claude/review-policy.md` has a `## Project rules` section, run one more engine. A repository's own conventions — "every endpoint needs an auth decorator", "no raw SQL outside `repositories/`", "migrations must be reversible" — are invisible to an engine that has never read them, so this is the one dimension the other two structurally cannot cover. Dispatch a subagent alongside the others, unnamed and in parallel, with the diff, the checkout path, and the rules **verbatim**.
+
+Don't push the rules into the `pr-review-toolkit` agents instead. This skill selects those agents and feeds them scope; it doesn't re-prompt them, and injecting project rules into each one would both cross that line and dilute the dimension each agent is actually good at.
+
+**This engine reports per rule, not only per finding.** Each rule comes back as checked-and-clean, violated (with the findings), or not-applicable-to-this-diff. That distinction matters because *An engine that returns no findings is a failed engine* below does **not** hold here: a project that follows its own rules produces zero violations, and that is success rather than breakage. The per-rule outcome is what keeps "nothing to report" separable from "never ran".
+
+Findings return in the usual shape, tagged source `project-rules`, scoped to changed lines like everything else — a sweep of the whole repository would bury the review in pre-existing violations the author didn't introduce.
+
 ## Collecting the engines' results
 
 Dispatching is the easy half. Getting the results back is where a review quietly loses half its wall-clock, so the mechanics are not optional.
@@ -61,6 +71,10 @@ Drop anything that doesn't clear this bar, regardless of which engine raised it:
 
 Apply the same skepticism to automated findings that a careful human reviewer applies to any bot: a confident finding is not a correct finding. When you can't verify a finding, lower its confidence and drop it rather than posting a guess.
 
+**Two of those drops don't apply to `project-rules` findings.** "Pedantic nitpick" and "generic, not called for by the codebase's conventions" are taste judgments — and a project rule *is* the codebase's convention, written down deliberately, so dropping one on taste overrules the decision the policy just made. Everything else applies in full, verification above all: a confidently wrong rule violation wastes the author's time exactly like any other false positive.
+
+**A `## Scope` section in the policy moves items in or out of this list.** The likeliest real uses are re-enabling what it drops by default — lint and type findings where the project has no CI to catch them, coverage complaints where the project does have a coverage policy. Anything the policy doesn't name keeps the default above.
+
 ## When a plugin is missing
 
 Degrade gracefully; don't hard-fail.
@@ -68,4 +82,5 @@ Degrade gracefully; don't hard-fail.
 - **No `code-review` plugin:** rely on the `pr-review-toolkit` agents alone.
 - **No `pr-review-toolkit`:** rely on the `code-review` plugin alone.
 - **Neither installed:** tell the user, then do a lighter inline review yourself — read the diff from `fetch-pr-context`, scan changed lines for real bugs and convention violations, assign a rough confidence, and note in the summary that this was a lighter pass. The rest of the workflow (house style, approval gate, post) is unchanged.
+- **Project rules with no agent dispatch:** fold them into the lighter inline pass rather than dropping them — read the diff against each rule yourself and still report per rule. No plugin covers this dimension, so it's the last thing to give up, not the first.
 - **No Agent tool in this context** (rare: a subagent at the nesting depth limit, or a harness without agent dispatch — ordinary subagents and forked skills do have the Agent tool and should run the engines normally): same lighter inline pass as above, and tell the user the parallel engines were skipped and why — re-running the skill from a context with agent dispatch restores them.
