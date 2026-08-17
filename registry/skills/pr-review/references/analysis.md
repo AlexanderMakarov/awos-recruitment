@@ -16,6 +16,10 @@ find ~/.claude/plugins -path '*code-review*/commands/code-review.md' -not -path 
 
 (If that finds nothing, drop the `-not -path` filter.) `Read` it and follow its analysis steps, then **stop before the step that posts** — its final step comments on the PR in a fixed style with an emoji footer, which this skill replaces. Keep the in-memory findings: file, line, what, why, suggested fix, confidence, and flag reason.
 
+**Honour the model each step names.** The recipe assigns Haiku to the eligibility check, the CLAUDE.md path list, the change summary and the re-check, Sonnet to the five parallel reviewers, and Haiku to the per-finding confidence scorers. Those assignments are the recipe's cost model, and they only happen if you pass `model:` explicitly on each `Agent` dispatch — an agent dispatched without one inherits *this session's* model. Measured across seven real runs, that inheritance is the single largest cost in the skill: every agent ran Opus, and engine 1 alone took 29–49% of each run's input-equivalent tokens doing work the recipe had priced for Haiku and Sonnet.
+
+The per-finding scorers are worth keeping rather than cutting. Their score is a breadth filter, not a truth signal, and the <80 cut is what stops engine 1 handing triage its full noise floor — at Haiku, which is what the recipe intended, that filter is cheap.
+
 ## Engine 2: pr-review-toolkit agents (depth)
 
 The `pr-review-toolkit` plugin provides specialized review agents that go deeper than a generic pass on the dimension they own. Dispatch them with the Agent tool (`subagent_type: "pr-review-toolkit:<agent>"`), giving each the PR diff and scope. For a large diff, chunk it by file or directory and dispatch per chunk rather than handing each agent the whole thing — a diff that overflows the context window gets reviewed shallowly; note in the summary if a chunk was too big to cover fully. Select by what the diff actually changed — running an agent whose dimension the PR doesn't touch wastes tokens and invites false positives:
@@ -32,6 +36,8 @@ The `pr-review-toolkit` plugin provides specialized review agents that go deeper
 
 Give each agent the context its dimension needs, not just the diff: `pr-test-analyzer` can't judge coverage gaps without the existing tests, and `comment-analyzer` needs the surrounding code to tell an outdated comment from a correct one. (These agents carry their own descriptions and system prompts — this skill selects them and feeds them scope; it doesn't re-prompt them.) Run the applicable agents in parallel. Each returns its own findings; treat them as high-signal for their dimension but still subject to the discipline below.
 
+Pass `model:` here too. These are depth passes over one bounded dimension, which is what Sonnet is for, and it matches what engine 1 gives its own reviewers. An agent whose definition names a model keeps it; one that doesn't will otherwise inherit the session's, which is how a review ends up running every specialist on the largest model available. Triage is the exception — that step is judgment, and it stays on the session model.
+
 ## Engine 3: project rules (only when the policy defines them)
 
 When the base-branch `.claude/review-policy.md` has a `## Project rules` section, run one more engine. A repository's own conventions — "every endpoint needs an auth decorator", "no raw SQL outside `repositories/`", "migrations must be reversible" — are invisible to an engine that has never read them, so this is the one dimension the other two structurally cannot cover. Dispatch a subagent alongside the others, unnamed and in parallel, with the diff, the checkout path, and the rules **verbatim**.
@@ -40,13 +46,25 @@ Don't push the rules into the `pr-review-toolkit` agents instead. This skill sel
 
 **This engine reports per rule, not only per finding.** Each rule comes back as checked-and-clean, violated (with the findings), or not-applicable-to-this-diff. That distinction matters because *An engine that returns no findings is a failed engine* below does **not** hold here: a project that follows its own rules produces zero violations, and that is success rather than breakage. The per-rule outcome is what keeps "nothing to report" separable from "never ran".
 
-Findings return in the usual shape, tagged source `project-rules`, scoped to changed lines like everything else — a sweep of the whole repository would bury the review in pre-existing violations the author didn't introduce.
+Sonnet, passed explicitly — matching a diff against rules someone already wrote down is checking, not judgment. Findings return in the usual shape, tagged source `project-rules`, scoped to changed lines like everything else — a sweep of the whole repository would bury the review in pre-existing violations the author didn't introduce.
+
+## The engine budget
+
+Three engines, and only three: the `code-review` plugin, the applicable `pr-review-toolkit` agents, and — when the policy defines rules — project rules. A session that spawns its own extra reviewers on top has invented a fourth engine, and the measurements say it is pure waste: across seven runs, session-invented `rev-*` reviewers cost 18% of one run while re-covering ground engines 1 and 2 had already covered.
+
+**Engines run one level deep.** An agent an engine dispatches does not dispatch agents of its own. Where that slipped, the same subject was reviewed four times across three depths at a measured 18% of the run, and nothing in the extra passes reached the review. Verification is not the engines' job — it belongs to the single step-3 triage agent, which costs 5–9% and is the step designed to do it. Triage may still fan its own mechanical per-finding checks out, as the SKILL workflow describes; that is the one sanctioned nesting and it is cheap.
+
+**Bound each engine.** Changed files plus one hop of context, then report. Left unbounded, a single agent ran 115 turns at roughly 150k of context each — more input-equivalent tokens on its own than a whole well-behaved run.
+
+**Hand context over by path, not inline.** Write the diff and the PR context to one scratchpad file and give each agent the path plus its scope line. Every agent that receives them inline pays to rebuild that prompt: measured cache-writes ran 84k–255k *per subagent*, which is where 0.8–4.2M tokens per run went.
 
 ## Collecting the engines' results
 
 Dispatching is the easy half. Getting the results back is where a review quietly loses half its wall-clock, so the mechanics are not optional.
 
 **Dispatch engines as ordinary subagents — never as named background agents.** An unnamed `Agent` call returns the agent's output as the tool result and the harness notifies you the moment it finishes. A *named* agent runs as a background teammate whose completion arrives as a teammate message instead, and that message can land long after the work is done. Measured on a real run: six engines were all idle within 8 minutes, their results were not collected for 28, and every completion notification arrived in one batch **after the review had already been posted**. Naming the agents is what broke it.
+
+This rule has now been written down and then broken twice — once three months after it landed, costing a 358-minute run with nine named teammates and a transcript full of "I don't see agents running", and again days later with five. Prose alone plainly doesn't hold it, so it gets a check with an artifact behind it: **enumerate every agent you dispatched — count, model, and depth — and carry that roster to the results gate.** Enumerating forces you to look at what you actually spawned, which is the step that catches a named agent, an unpinned model, or a depth-2 dispatch while there is still time to abandon it.
 
 **Never poll.** No `sleep` loops, no `until [ -s <file> ]; do sleep 30; done`, no watching a task's output file, no re-listing a directory to see if something appeared. The same run spent **31 of its 72 minutes** in 35 polling calls, 17 of which were killed by the 120-second command timeout — while waiting on results that already existed. If you find yourself writing a wait loop, the dispatch was wrong: fix the dispatch.
 
