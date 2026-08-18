@@ -38,6 +38,8 @@ Use it when your project's economics differ from the default. Three different pr
 >
 > A prototype repository: *"Nothing blocks. Every finding is a comment; we merge and iterate."*
 
+This section also decides what earns a `[major]` mark on an individual finding, since that mark means "this won't be approved until it's resolved" — the same judgment at finding scale. A project that blocks on missing tests is a project where a missing test is `[major]`.
+
 **Project-rule violations get no automatic verdict weight.** Writing a rule under `## Project rules` makes it *checked*, not *blocking*. If you want a rule to block, say so here too — the natural assumption that writing a rule makes violating it a blocker is wrong, and it's the most common surprise with this file.
 
 ## `## Scope`
