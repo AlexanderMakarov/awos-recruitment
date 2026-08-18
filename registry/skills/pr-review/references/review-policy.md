@@ -38,7 +38,7 @@ Use it when your project's economics differ from the default. Three different pr
 >
 > A prototype repository: *"Nothing blocks. Every finding is a comment; we merge and iterate."*
 
-This section also decides what earns a `[major]` mark on an individual finding, since that mark means "this won't be approved until it's resolved" — the same judgment at finding scale. A project that blocks on missing tests is a project where a missing test is `[major]`.
+This section also decides which findings carry the `[major]` mark, because "this blocks the merge" and "this won't be approved until it's resolved" are the same judgment at different scales. Name a class here and findings in it come back marked, and the verdict follows — a project that blocks on missing tests is one where a missing test is `[major]`. Nothing you name here is advisory.
 
 **Project-rule violations get no automatic verdict weight.** Writing a rule under `## Project rules` makes it *checked*, not *blocking*. If you want a rule to block, say so here too — the natural assumption that writing a rule makes violating it a blocker is wrong, and it's the most common surprise with this file.
 
@@ -53,6 +53,12 @@ The two most useful moves are both re-enabling something the default drops, and 
 > *"Report missing coverage on changed lines. We hold 80% and mean it."*
 
 It works the other direction too — naming something to drop that the default keeps — but that's rarer, and worth a moment's thought: a class of finding you never want to see is often one worth fixing at the source instead.
+
+**Suppressing nits belongs here.** `[nit]` findings are the ones the reviewer marks as safe to skip, and some teams would still rather not read them:
+
+> *"Don't post nits. Wording and formatting go through a separate pass."*
+
+Worth knowing what that costs before setting it: the mark already tells the author they can ignore those comments, so suppressing them buys a shorter review rather than less obligation. It also silently drops the "while we're here" observations, which are cheap to act on precisely because nobody has to.
 
 ## `## How findings read`
 

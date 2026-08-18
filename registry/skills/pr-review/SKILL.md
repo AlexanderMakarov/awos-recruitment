@@ -110,9 +110,9 @@ Order by what matters, explained in words. Draft a one-line **verdict** intent f
 
 Holding a PR open over log-field quality and comment accuracy costs more in cycle time than those findings cost in risk — and it costs most on a late round, where the remainder is nearly always visibility and hygiene. Approving is a statement about the verdict, never a reason to drop or soften a finding: post them all, and say plainly in the summary why you're approving anyway. This is the verdict *intent* either way — the user picks the verdict at delivery.
 
-**The `[major]` marks and the verdict are the same judgment, so they must agree.** Any finding marked `[major]` in the draft means the verdict intent is request-changes; a verdict of approve or comment means no finding carries that mark. If you find yourself wanting to approve a PR that has a `[major]` on it, one of the two is wrong — fix whichever it is before the gate rather than shipping a review that contradicts itself.
-
 **A project policy layers over these three classes.** `## What blocks merge` can add or reclassify specific ones — "missing tests on changed behavior blocks", "nothing blocks in this spike repo". The impact rule above still decides everything the policy doesn't name, and a project rule violation carries no automatic weight unless the policy says so.
+
+**The `[major]` marks and the verdict are the same judgment, so they must agree.** Any finding marked `[major]` in the draft means the verdict intent is request-changes; a verdict of approve or comment means no finding carries that mark. If you find yourself wanting to approve a PR that has a `[major]` on it, one of the two is wrong — fix whichever it is before the gate rather than shipping a review that contradicts itself. This covers anything the policy made blocking too: where `## What blocks merge` says missing tests block, a missing test is `[major]` and the verdict follows it.
 
 **Whatever the verdict, the summary gives its reason in concrete terms** — what merging would cost, not a count of findings. "Errors surface on the happy path" is a reason; "two blockers" is a tally the author can't act on. See "The summary body" in [references/house-style.md](references/house-style.md).
 
