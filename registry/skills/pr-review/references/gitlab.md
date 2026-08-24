@@ -164,7 +164,10 @@ Do still tell the user what's already there before appending, and confirm — pu
 **Default delivery in public mode** when `DRAFTS=yes`. Each finding is one draft note, unpublished until the user publishes them. Post them one call at a time; GitLab's own docs pass the position as bracketed form fields, which is what `glab api --form` sends:
 
 ```sh
-glab api -X POST "projects/$PROJECT/merge_requests/$IID/draft_notes" \
+POSTED_IDS_FILE=<scratch-dir>/posted-ids   # this run's inline notes, one id per line
+: > "$POSTED_IDS_FILE"                     # once, before the first post
+
+NOTE_ID=$(glab api -X POST "projects/$PROJECT/merge_requests/$IID/draft_notes" \
   --form 'note=<finding, in house style>' \
   --form 'position[position_type]=text' \
   --form "position[base_sha]=$BASE_SHA" \
@@ -172,10 +175,10 @@ glab api -X POST "projects/$PROJECT/merge_requests/$IID/draft_notes" \
   --form "position[head_sha]=$HEAD_SHA" \
   --form 'position[old_path]=src/foo.py' \
   --form 'position[new_path]=src/foo.py' \
-  --form 'position[new_line]=42' | jq .id
+  --form 'position[new_line]=42' | jq -er '.id') && printf '%s\n' "$NOTE_ID" >> "$POSTED_IDS_FILE"
 ```
 
-Collect each returned `.id` as you post (`POSTED_IDS="${POSTED_IDS:+$POSTED_IDS,}$NOTE_ID"`) — inline notes only, not the summary note below. The anchoring check scopes to these, so the user's own pre-existing drafts never enter it.
+Record inline notes only, never the summary note below — the anchoring check scopes to this list, so the user's own pre-existing drafts never enter it. Two details carry the weight. The ids go to a **file** because each post is its own tool call and shell variables don't survive between them; a `POSTED_IDS` variable set beside the first post is empty by the time the check runs. And `jq -er` is what makes the capture honest: an error body has no `.id`, so jq exits non-zero and the `&&` leaves the file untouched. A post that hands back no id created no note — stop and fix it there, rather than posting the rest against a list that no longer matches what you sent.
 
 - **`position[...]` must go via `--form`. Sending it with `-f` silently discards it.** `-f/--raw-field` builds a JSON body, and GitLab only reads the bracketed position params form-encoded — so with `-f` the call returns **HTTP 201, exit 0**, and the note lands **unanchored at MR level with `position: null`**. There is no error to catch: it looks like a clean success, and the author sees a top-level comment with no idea which line it refers to. The only way back is deleting and reposting every affected note.
 - `new_line` is the line in the MR's head version. For a line that only exists before the change (a deletion), send `position[old_line]` instead; for a line present in both, sending both is safest.
@@ -194,13 +197,18 @@ glab api -X POST "projects/$PROJECT/merge_requests/$IID/draft_notes" \
 **Verify anchoring, not just arrival.** A count check can't see the failure above, because the mis-delivered notes are still *there* — just detached. Re-read the notes this run created and assert each has a path and a line anchor — `new_line`, or `old_line` for a comment on a deleted line:
 
 ```sh
-glab api "projects/$PROJECT/merge_requests/$IID/draft_notes" | jq -r --argjson ids "[$POSTED_IDS]" '
-  .[] | select(.id as $id | $ids | index($id))
-  | "\(if .position.new_path == null or (.position.new_line == null and .position.old_line == null)
-       then "UNANCHORED" else "ok" end)  \(.position.new_path // "-"):\(.position.new_line // .position.old_line // "-")  \(.id)"'
+glab api "projects/$PROJECT/merge_requests/$IID/draft_notes" \
+  | jq -r --argjson ids "[$(paste -sd, "$POSTED_IDS_FILE")]" '
+  . as $notes
+  | $ids[] as $id
+  | ([$notes[] | select(.id == $id)] | first) as $n
+  | if $n == null then "MISSING     -  \($id)"
+    elif $n.position.new_path == null or ($n.position.new_line == null and $n.position.old_line == null)
+      then "UNANCHORED  -  \($id)"
+    else "ok  \($n.position.new_path):\($n.position.new_line // $n.position.old_line)  \($id)" end'
 ```
 
-Every row must read `ok` — the summary note isn't in `$POSTED_IDS`, so there is no expected `UNANCHORED`. Any `UNANCHORED` row was mis-delivered, and delivery hasn't succeeded until this check is clean: fix it before telling the user anything landed.
+The check is driven by the ids you posted, not by whatever the API happened to return, and that's the difference between a check and a formality: a note that never comes back reads `MISSING` instead of quietly dropping out of the comparison. **One row per posted id, and every row reads `ok`.** Fewer rows than notes you posted means the check itself failed — an empty id file, or a `glab` call that errored and printed nothing — and no output is a failure, never a pass. The summary note isn't in the list, so there is no expected `UNANCHORED`. Delivery hasn't succeeded until this check is clean: fix it before telling the user anything landed.
 
 After creating, confirm the drafts landed — re-run `find-pending-review` and check the count is `BASELINE + <findings> + 1` for the summary note. It is not equal to what you posted: pre-existing drafts are appended to, never replaced, so comparing against the posted count alone reports a phantom failure for any user who had drafts of their own. Report the count to the user with the MR URL; GitLab shows pending drafts in the MR's **Changes** tab, and publishing is a button there ("Submit review"), or:
 
