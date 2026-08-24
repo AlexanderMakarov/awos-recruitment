@@ -6,7 +6,7 @@
 
 - **Two marks, and no ladder behind them.** A finding may carry `[nit]` or `[major]`, or no mark at all. Nothing else: no `CRITICAL`/`HIGH`/`MEDIUM`/`LOW`, no `minor`, no colored dots. A graded scale gets the author ranking your findings instead of reading them, and its middle rungs never mean anything in practice. These two survive because they answer the questions prose leaves genuinely ambiguous — *may I skip this?* and *will this stop my merge?* — and the author otherwise has to guess.
   - **`[nit]`** — safe to skip, and you won't be asked about it again. Wording, formatting, a doc tidied up while you're in there. The test is consequence, not size: a confusing variable name is a nit; a wrong error message is not, because that one makes the program tell its user something untrue.
-  - **`[major]`** — this won't be approved until it's resolved. Same bar as the request-changes verdict, so the two can't drift apart: it does the wrong thing on a path that runs normally, or it loses data, corrupts state, or opens a security hole.
+  - **`[major]`** — this won't be approved until it's resolved. Same bar as the request-changes verdict, so the two can't drift apart: it does the wrong thing on a path that runs normally, or it loses data, corrupts state, opens a security hole, or takes the service down. A slower service isn't this; an unavailable one is.
   - **unmarked** — the default, and most findings live here: worth fixing, not blocking, not throwaway.
 
   The mark routes attention; it never replaces the explanation. A `[major]` still has to say in a sentence what breaks, and marking everything `[major]` to convey urgency just returns you to a severity ladder with two rungs.

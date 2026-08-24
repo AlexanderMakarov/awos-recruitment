@@ -6,7 +6,7 @@
 
 `.claude/review-policy.md`, committed in the repository under review. Markdown, four optional `##` sections, in any order:
 
-```
+```text
 ## What blocks merge
 ## Scope
 ## How findings read
