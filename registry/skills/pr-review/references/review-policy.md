@@ -68,7 +68,7 @@ What you can change is **trace depth** — whether a finding walks the path from
 
 > *"Skip the worked trace on query and index findings. Everyone reviewing this repo writes SQL daily."*
 
-What you **cannot** change is the density floor: one idea per sentence, plain words, no stacked clauses, no unexplained jargon. That floor exists because a review asked to "be terse" doesn't get shorter — it gets *denser*, packing the same content into harder sentences, and the reader pays the difference back decompressing it. A policy that could turn the floor off would reintroduce exactly the problem it was written to fix. Ask for less content, not tighter packing.
+What you **cannot** change is the density floor — one idea per sentence, plain words. The floor and its rationale are owned by "Voice" in [house-style.md](house-style.md); ask for less content, not tighter packing.
 
 ## `## Project rules`
 

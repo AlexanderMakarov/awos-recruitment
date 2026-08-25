@@ -16,7 +16,7 @@ find ~/.claude/plugins -path '*code-review*/commands/code-review.md' -not -path 
 
 (If that finds nothing, drop the `-not -path` filter.) `Read` it and follow its analysis steps, then **stop before the step that posts** — its final step comments on the PR in a fixed style with an emoji footer, which this skill replaces. Keep the in-memory findings: file, line, what, why, suggested fix, confidence, and flag reason.
 
-**Honour the model each step names.** The recipe assigns Haiku to the eligibility check, the CLAUDE.md path list, the change summary and the re-check, Sonnet to the five parallel reviewers, and Haiku to the per-finding confidence scorers. Those assignments are the recipe's cost model, and they only take effect if `model:` is passed explicitly on each `Agent` dispatch — an agent dispatched without one inherits *this session's* model instead. Engine 1 is 29–49% of a run's total token cost, so leaving it on an inherited model is the most expensive mistake available in this skill.
+**Honour the model each step names** — the assignments and why they matter are in "Model discipline" below.
 
 The per-finding scorers are worth keeping rather than cutting. Their score is a breadth filter, not a truth signal, and the <80 cut is what stops engine 1 handing triage its full noise floor — at Haiku, which is what the recipe intended, that filter is cheap.
 
@@ -36,7 +36,7 @@ The `pr-review-toolkit` plugin provides specialized review agents that go deeper
 
 Give each agent the context its dimension needs, not just the diff: `pr-test-analyzer` can't judge coverage gaps without the existing tests, and `comment-analyzer` needs the surrounding code to tell an outdated comment from a correct one. (These agents carry their own descriptions and system prompts — this skill selects them and feeds them scope; it doesn't re-prompt them.) Run the applicable agents in parallel. Each returns its own findings; treat them as high-signal for their dimension but still subject to the discipline below.
 
-Pass `model:` here too. These are depth passes over one bounded dimension, which is what Sonnet is for, and it matches what engine 1 gives its own reviewers. An agent whose definition names a model keeps it; one that doesn't will otherwise inherit the session's, which is how a review ends up running every specialist on the largest model available. Triage is the exception — that step is judgment, and it stays on the session model.
+Pass `model:` here too — see "Model discipline" below.
 
 ## Engine 3: project rules (only when the policy defines them)
 
@@ -46,7 +46,20 @@ Don't push the rules into the `pr-review-toolkit` agents instead. This skill sel
 
 **This engine reports per rule, not only per finding.** Each rule comes back as checked-and-clean, violated (with the findings), or not-applicable-to-this-diff. A project that follows its own rules produces zero violations, and the per-rule outcome is what shows that as a clean run rather than a silent one — the sharpest form of what *An engine that never reports is a failed engine* below asks of every engine.
 
-Sonnet, passed explicitly — matching a diff against rules someone already wrote down is checking, not judgment. Findings return in the usual shape, tagged source `project-rules`, scoped to changed lines like everything else — a sweep of the whole repository would bury the review in pre-existing violations the author didn't introduce.
+Findings return in the usual shape, tagged source `project-rules`, scoped to changed lines like everything else — a sweep of the whole repository would bury the review in pre-existing violations the author didn't introduce.
+
+## Model discipline
+
+`model:` goes on every agent dispatch this skill makes, with exactly one exception. An agent dispatched without it silently inherits the session's model, and engine 1 alone is 29–49% of a run's total token cost — leaving its recipe on an inherited model is the most expensive mistake available in this skill.
+
+| Dispatch | Model | Why |
+|---|---|---|
+| Engine 1: eligibility check, CLAUDE.md path list, change summary, re-check, per-finding scorers | Haiku | The recipe's own cost model — honour what each step names |
+| Engine 1: the five parallel reviewers | Sonnet | Same recipe |
+| Engine 2: `pr-review-toolkit` specialists | Sonnet | A depth pass over one bounded dimension; an agent whose definition names a model keeps it |
+| Engine 3: project-rules agent | Sonnet | Matching a diff against written rules is checking, not judgment |
+| Scratchpad digest (step 1), triage's mechanical per-finding checks | small/fast model | Extraction and matching, not judgment |
+| **Step 3 triage subagent** | **none — inherits the session model** | The one deliberate exception: triage is judgment, not a bounded pass |
 
 ## The engine budget
 
