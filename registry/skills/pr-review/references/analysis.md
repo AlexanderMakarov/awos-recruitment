@@ -58,7 +58,7 @@ Findings return in the usual shape, tagged source `project-rules`, scoped to cha
 | Engine 1: the five parallel reviewers | Sonnet | Same recipe |
 | Engine 2: `pr-review-toolkit` specialists | Sonnet | A depth pass over one bounded dimension; an agent whose definition names a model keeps it |
 | Engine 3: project-rules agent | Sonnet | Matching a diff against written rules is checking, not judgment |
-| Scratchpad digest (step 1), triage's mechanical per-finding checks | small/fast model | Extraction and matching, not judgment |
+| Scratchpad digest (step 1), triage's mechanical per-finding checks | Haiku | Extraction and matching, not judgment |
 | **Step 3 triage subagent** | **none — inherits the session model** | The one deliberate exception: triage is judgment, not a bounded pass |
 
 ## The engine budget
@@ -118,6 +118,6 @@ Degrade gracefully; don't hard-fail.
 
 - **No `code-review` plugin:** rely on the `pr-review-toolkit` agents alone.
 - **No `pr-review-toolkit`:** rely on the `code-review` plugin alone.
-- **Neither installed:** tell the user, then do a lighter inline review yourself — work from the diff step 1 already gathered (`fetch-pr-context` in public mode, `get-local-diff` in local), scan changed lines for real bugs and convention violations, assign a rough confidence, and note in the summary that this was a lighter pass. The rest of the workflow (house style, approval gate, post) is unchanged.
+- **Neither installed:** tell the user, then do a lighter inline review yourself — work from the diff step 1 already gathered (`fetch-pr-context` in public mode, `get-local-diff` in local), scan changed lines for real bugs and convention violations, assign a rough confidence, and note in the step 7 chat summary — never in the posted review text (house-style.md owns that rule) — that this was a lighter pass. The rest of the workflow (house style, approval gate, post) is unchanged.
 - **Project rules with no agent dispatch:** fold them into the lighter inline pass rather than dropping them — read the diff against each rule yourself and still report per rule. No plugin covers this dimension, so it's the last thing to give up, not the first.
 - **No Agent tool in this context** (rare: a subagent at the nesting depth limit, or a harness without agent dispatch — ordinary subagents and forked skills do have the Agent tool and should run the engines normally): same lighter inline pass as above, and tell the user the parallel engines were skipped and why — re-running the skill from a context with agent dispatch restores them.

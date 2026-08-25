@@ -97,10 +97,11 @@ If agent dispatch is unavailable (rare — the nesting depth limit, where the en
 
 ### 4. Draft in house style
 
-Turn the survivors into a review per [references/house-style.md](references/house-style.md) — a policy `## How findings read` section applies here. Separate the two buckets explicitly:
+Turn the survivors into a review per [references/house-style.md](references/house-style.md) — a policy `## How findings read` section applies here. Separate the buckets explicitly:
 
 - **Inline findings** — anchored to `path:line`, each a plain-voice comment.
 - **Architectural notes** — cross-cutting observations not tied to a single line: the summary body (public) or the file's "Architectural notes" section (local).
+- **Thread replies** (public) — step 3's `reply-to-thread` plan: each reply with the thread it answers and its full body.
 
 Order by what matters, explained in words.
 
@@ -122,13 +123,13 @@ Rules the matrix travels with:
 
 This is the verdict *intent*; the user picks the verdict at delivery.
 
-**Materialize the draft with `Write`** to `review/pr-<N>-draft.md` in the repo whose code is under review (create `review/` if missing; it stays out of commits, gitignored or per the user's preference). In a multi-repo checkout that means the service's own clone, not the parent — say which path you used. This file is element 1 of the gate contract below: without it there is no draft, whatever the session remembers composing.
+**Materialize the draft with `Write`** to `review/pr-<N>-draft.md` — in local mode, which has no PR number, to `review/<BRANCH>-draft.md` (`/` in the branch name becomes `-`, as in `write-review-file`) — in the repo whose code is under review (create `review/` if missing; it stays out of commits, gitignored or per the user's preference). In a multi-repo checkout that means the service's own clone, not the parent — say which path you used. This file is element 1 of the gate contract below: without it there is no draft, whatever the session remembers composing.
 
 ### 5. Results gate
 
 **Before asking**, re-read the draft against "What never goes in a posted review" and the voice rules in [references/house-style.md](references/house-style.md), and strike every line they name — claimed investigations that didn't run, notes about the review itself, mechanism-first openings, multi-claim sentences. Then confirm the summary opens on the PR and your overall read, not on the first bug.
 
-**Delivery capability.** `preflight` settled whether drafts work here. If they don't — no Draft Notes API, a missing token scope, an MCP fallback with no draft tool — "Proceed" below would publish immediately under a label the user read as "draft": say so, and offer **publish now** or **write to a file and post nothing**. Never present a publishing action as a draft.
+**Delivery capability.** `preflight` settled whether drafts work here. If they don't — no Draft Notes API, a missing token scope, an MCP fallback with no draft tool — "Proceed" below would publish immediately under a label the user read as "draft": say so, and in the gate's options replace **Proceed** with **Publish now** and **Write to a file, post nothing** — step 6 delivers whichever the user picked. Never present a publishing action as a draft.
 
 **Two status lines**, chat only — method notes about your own configuration, never part of the posted review:
 
@@ -140,9 +141,9 @@ This is the verdict *intent*; the user picks the verdict at delivery.
 **The gate is an output contract.** The gate turn consists of, in order:
 
 1. the step 4 draft file exists in `review/`, written by a `Write` call this session;
-2. this message contains that file's full content as text — summary, architectural notes, every inline finding with its `path:line`;
+2. this message contains that file's full content as text — summary, architectural notes, every inline finding with its `path:line`, and (public) every thread reply with its target and full body;
 3. `AskUserQuestion` is called with the file path in the question ("full draft in `review/pr-<N>-draft.md`");
-4. the options are **Proceed** / **Back findings with external sources** / **Change something**.
+4. the options are **Proceed** / **Back findings with external sources** / **Change something** — except on a no-draft platform, where the two delivery options from "Delivery capability" replace **Proceed**.
 
 Missing any element means the gate didn't happen — go back to the missing one. Session-wide brevity or compression modes govern commentary, never elements 1–2: a file path, a recap, or "the draft is above" satisfies nothing, and a memory of having printed is not element 2 — only text visible in this turn is.
 
@@ -150,7 +151,7 @@ Missing any element means the gate didn't happen — go back to the missing one.
 - **Back findings with external sources** (optional) — the only point in this workflow where anything is fetched from outside the repo; it's a choice rather than a default because it's slow and most findings don't need it. Start with the findings marked as needing external evidence, then any other contestable one. Verify each against a trusted source (official docs, the language or library spec, a high-signal StackOverflow answer or hosted-repo issue, or — for an architectural claim — the project's own sibling repos and artifacts), attach the link in the comment, and **drop claims you can't substantiate** (a finding grounded in the diff stands on its own). Then re-present the revised draft and return to this gate.
 - **Change something** — take the user's edits (reword, drop, split, re-anchor), restate, and confirm, respecting their granularity choices. If their edits read like a standing rule (the same class dropped every review, a repeated verdict override), offer once that `## What blocks merge` can hold it — don't press, and never write the policy file for them without asking.
 
-Post or write nothing before the user picks Proceed.
+Deliver nothing before the user picks Proceed — nothing posted, no `write-review-file`; the step 4 draft in `review/` is the one write that happens before the gate.
 
 ### 6. Deliver
 
