@@ -151,7 +151,7 @@ Missing any element means the gate didn't happen — go back to the missing one.
 - **Back findings with external sources** (optional) — the only point in this workflow where anything is fetched from outside the repo; it's a choice rather than a default because it's slow and most findings don't need it. Start with the findings marked as needing external evidence, then any other contestable one. Verify each against a trusted source (official docs, the language or library spec, a high-signal StackOverflow answer or hosted-repo issue, or — for an architectural claim — the project's own sibling repos and artifacts), attach the link in the comment, and **drop claims you can't substantiate** (a finding grounded in the diff stands on its own). Then re-present the revised draft and return to this gate.
 - **Change something** — take the user's edits (reword, drop, split, re-anchor), restate, and confirm, respecting their granularity choices. If their edits read like a standing rule (the same class dropped every review, a repeated verdict override), offer once that `## What blocks merge` can hold it — don't press, and never write the policy file for them without asking.
 
-Deliver nothing before the user picks Proceed — nothing posted, no `write-review-file`; the step 4 draft in `review/` is the one write that happens before the gate.
+Deliver nothing before the user picks a delivery option — **Proceed**, or on a no-draft platform **Publish now** / **Write to a file, post nothing** — nothing posted, no `write-review-file`; the step 4 draft in `review/` is the one write that happens before the gate.
 
 ### 6. Deliver
 
@@ -162,9 +162,9 @@ Posting/saving is automated after approval; judgment is not. In public mode, if 
 
 ### 7. Summarize and loop
 
-Print what was delivered — the draft review URL and inline count, or the file path and counts — with the PR URL on its own line in public mode.
+Print what was delivered — the draft review URL and inline count, the published review URL (no-draft platform, **Publish now**), or the file path and counts (local, or **Write to a file, post nothing**) — with the PR URL on its own line in public mode.
 
-**Public: end the turn with the summary body verbatim**, in a fenced markdown block, plus the verdict intent and any thread replies sent, making clear it's a draft awaiting their submit. This is elements 1–2 of the gate contract applied to the summary: only text visible in this turn's final message counts, whatever brevity mode is active — on every turn that ends with the draft created or partially delivered, including turns cut short by errors. The platform may not show the draft's summary until submit, so this message can be the user's only copy of the text to paste.
+**Public: end the turn with the summary body verbatim**, in a fenced markdown block, plus the verdict intent and any thread replies sent, stating what the result is — a draft awaiting their submit, a published review (**Publish now**), or a file with nothing posted (**Write to a file, post nothing**). This is elements 1–2 of the gate contract applied to the summary: only text visible in this turn's final message counts, whatever brevity mode is active — on every turn that ends with the draft created or partially delivered, including turns cut short by errors. On the draft path, the platform may not show the summary until submit, so this message can be the user's only copy of the text to paste.
 
 **Amendments (public).** Every post-delivery change re-enters step 5: update the step 4 file, run the gate contract, then post. A request to change something approves the **action**, never the **wording**. Amend in place with the platform's edit operation; never delete and recreate.
 
