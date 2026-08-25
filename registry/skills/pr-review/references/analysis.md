@@ -6,7 +6,7 @@ The two engines are independent until the merge — don't run them back to back.
 
 ## Engine 1: the code-review plugin (breadth)
 
-The `code-review` plugin runs a strong generic recipe: an eligibility check, CLAUDE.md collection, a change summary, five parallel agents (CLAUDE.md adherence, obvious bugs, git history, prior-PR comments, code-comment guidance), and a 0–100 confidence score per issue filtered at 80. Reuse it for breadth, but take only its findings — not its output format or posting. Treat that score as a breadth filter, not a truth signal: a model's self-reported confidence is unreliable on its own, so this skill never leans on it alone — every finding is cross-checked by a second, independent engine (the `pr-review-toolkit` agents) and the human gate, which is the cross-review that actually raises quality.
+The `code-review` plugin runs a strong generic recipe: an eligibility check, CLAUDE.md collection, a change summary, five parallel agents (CLAUDE.md adherence, obvious bugs, git history, prior-PR comments, code-comment guidance), and a 0–100 confidence score per issue filtered at 80. Reuse it for breadth, but take only its findings — not its output format or posting. Treat the score as a breadth filter, not a truth signal — every finding is still cross-checked by engine 2 and triage.
 
 Locate its command spec and follow its **analysis steps** to produce the scored, filtered findings list:
 
@@ -15,8 +15,6 @@ find ~/.claude/plugins -path '*code-review*/commands/code-review.md' -not -path 
 ```
 
 (If that finds nothing, drop the `-not -path` filter.) `Read` it and follow its analysis steps, then **stop before the step that posts** — its final step comments on the PR in a fixed style with an emoji footer, which this skill replaces. Keep the in-memory findings: file, line, what, why, suggested fix, confidence, and flag reason.
-
-**Honour the model each step names** — the assignments and why they matter are in "Model discipline" below.
 
 The per-finding scorers are worth keeping rather than cutting. Their score is a breadth filter, not a truth signal, and the <80 cut is what stops engine 1 handing triage its full noise floor — at Haiku, which is what the recipe intended, that filter is cheap.
 
@@ -36,8 +34,6 @@ The `pr-review-toolkit` plugin provides specialized review agents that go deeper
 
 Give each agent the context its dimension needs, not just the diff: `pr-test-analyzer` can't judge coverage gaps without the existing tests, and `comment-analyzer` needs the surrounding code to tell an outdated comment from a correct one. (These agents carry their own descriptions and system prompts — this skill selects them and feeds them scope; it doesn't re-prompt them.) Run the applicable agents in parallel. Each returns its own findings; treat them as high-signal for their dimension but still subject to the discipline below.
 
-Pass `model:` here too — see "Model discipline" below.
-
 ## Engine 3: project rules (only when the policy defines them)
 
 When the base-branch `.claude/review-policy.md` has a `## Project rules` section, run one more engine. A repository's own conventions — "every endpoint needs an auth decorator", "no raw SQL outside `repositories/`", "migrations must be reversible" — are invisible to an engine that has never read them, so this is the one dimension the other two structurally cannot cover. Dispatch a subagent alongside the others, unnamed and in parallel, with the diff, the checkout path, and the rules **verbatim**.
@@ -46,11 +42,11 @@ Don't push the rules into the `pr-review-toolkit` agents instead. This skill sel
 
 **This engine reports per rule, not only per finding.** Each rule comes back as checked-and-clean, violated (with the findings), or not-applicable-to-this-diff. A project that follows its own rules produces zero violations, and the per-rule outcome is what shows that as a clean run rather than a silent one — the sharpest form of what *An engine that never reports is a failed engine* below asks of every engine.
 
-Findings return in the usual shape, tagged source `project-rules`, scoped to changed lines like everything else — a sweep of the whole repository would bury the review in pre-existing violations the author didn't introduce.
+Findings come back in the same fields as the other engines ("Merge and carry forward" lists them), tagged source `project-rules` — the false-positive discipline keys on that tag — and scoped to changed lines.
 
 ## Model discipline
 
-`model:` goes on every agent dispatch this skill makes, with exactly one exception. An agent dispatched without it silently inherits the session's model, and engine 1 alone is 29–49% of a run's total token cost — leaving its recipe on an inherited model is the most expensive mistake available in this skill.
+`model:` goes on every agent dispatch this skill makes, with exactly one exception — an agent dispatched without it silently inherits the session's model.
 
 | Dispatch | Model | Why |
 |---|---|---|
@@ -63,37 +59,35 @@ Findings return in the usual shape, tagged source `project-rules`, scoped to cha
 
 ## The engine budget
 
-Three engines, and only three: the `code-review` plugin, the applicable `pr-review-toolkit` agents, and — when the policy defines rules — project rules. Spawning extra reviewers on top invents a fourth engine that re-covers ground engines 1 and 2 already cover, at roughly a fifth of the run's cost for nothing.
+**Every applicable engine runs — this is not a pick-one menu.** Engines 1 and 2 always run together (they cross-check each other); engine 3 joins only when the policy defines rules. Fewer engines is the degraded path in "When a plugin is missing" below, never a choice. And only these three: no extra reviewers on top.
 
-**Engines run one level deep.** An agent an engine dispatches does not dispatch agents of its own. Deeper fan-outs review the same subject several times over and their extra passes don't reach the posted review, so the cost is pure duplication. Verification isn't the engines' job — it belongs to the single step-3 triage agent, which is designed for it and costs a fraction of an ad-hoc verify swarm. Triage may still fan its own mechanical per-finding checks out, as the SKILL workflow describes; that is the one sanctioned nesting, and it's cheap.
+**Engines run one level deep.** An agent an engine dispatches does not dispatch agents of its own — verification belongs to the step-3 triage agent. Triage's own mechanical per-finding fan-out is the one sanctioned nesting.
 
-**Bound each engine.** Changed files plus one hop of context, then report. An unbounded agent will happily run over a hundred turns at full context and cost more on its own than an entire disciplined run.
+**Bound each engine.** Changed files plus one hop of context, then report.
 
-**Engines read the repo, not the network.** Verification inside an engine means the code, the diff, and the repo's own artifacts — `Read` the file, `Grep` the sibling module, open the test that covers it. Fetching documentation or searching the web is latency-bound rather than token-bound, so the cost never shows up as tokens; it shows up as the engine phase running two or three times longer, on the critical path, before the user has seen a single finding. Two engines doing it can add ten minutes to a review between them.
+**Engines read the repo, not the network.** Verification inside an engine means the code, the diff, and the repo's own artifacts — `Read` the file, `Grep` the sibling module, open the test that covers it. A finding that can't be settled from the repo — an API that may not exist, a spec version, an upstream default — comes back with the open question attached, confidence lowered, marked as needing external evidence; step 5's "Back findings with external sources" is where the user opts into that fetch.
 
-When a finding genuinely can't be settled from the repo — an API that may not exist, a spec version, an upstream default — don't fetch it. Return the finding with the open question attached and its confidence lowered, marked as needing external evidence. Step 5's "Back findings with external sources" is where that check belongs: by then the user has read the finding and can decide whether it's worth the wait. Most findings never need it, and the ones that do should get it on request rather than by default.
-
-**Hand context over by path, not inline.** Write the diff and the PR context to one scratchpad file and give each agent the path plus its scope line. An agent handed them inline pays to rebuild that prompt in its own cache, and at 84–255k per agent across a dozen agents that is the largest avoidable cost after the model choice.
+**Hand context over by path, not inline.** Write the diff and the PR context to one scratchpad file and give each agent the path plus its scope line.
 
 ## Collecting the engines' results
 
 Dispatching is the easy half. Getting the results back is where a review quietly loses half its wall-clock, so the mechanics are not optional.
 
-**Dispatch engines as ordinary subagents — never as named background agents.** An unnamed `Agent` call returns the agent's output as the tool result and the harness notifies you the moment it finishes. A *named* agent runs as a background teammate whose completion arrives as a teammate message instead, and that message can land long after the work itself finished — engines that went idle in minutes routinely aren't collected for half an hour, sometimes not until after the review is already posted. Naming the agents is the whole cause.
+**Dispatch engines as ordinary subagents — never as named background agents.** An unnamed `Agent` call returns its output as the tool result the moment it finishes; a named agent's completion arrives as a background teammate message that can land long after the work is done.
 
-Prose alone has proven unable to hold this rule, so it carries a check with an artifact behind it: **enumerate every agent dispatched — count, model, and depth — and carry that roster to the results gate.** Enumerating forces a look at what was actually spawned, which is what catches a named agent, an unpinned model, or a depth-2 dispatch while there's still time to abandon it.
+**Enumerate every agent dispatched — count, model, and depth — and carry that roster to the results gate.** The roster is what catches a named agent, an unpinned model, or a depth-2 dispatch while there's still time to abandon it.
 
-**Never poll.** No `sleep` loops, no `until [ -s <file> ]; do sleep 30; done`, no watching a task's output file, no re-listing a directory to see if something appeared. Polling burns wall-clock waiting on results that already exist, and long waits get killed by the 120-second command timeout anyway, so it fails slowly and then fails again. A wait loop means the dispatch was wrong: fix the dispatch.
+**Never poll.** No `sleep` loops, no `until [ -s <file> ]; do sleep 30; done`, no watching a task's output file, no re-listing a directory. A wait loop means the dispatch was wrong: fix the dispatch.
 
-**Never read agent transcripts to recover a result.** The `.jsonl` files under the session's `subagents/` directory are harness internals, not an API. Scraping them for "the last assistant message" is how you end up acting on a **partial** result: a transcript read mid-flight returns whatever fragment exists at that instant, indistinguishable from a finished answer. Act on it and the real result lands afterwards, contradicting a review that is already posted.
+**Never read agent transcripts to recover a result.** The `.jsonl` files under `subagents/` are harness internals; a mid-flight read returns a partial result indistinguishable from a finished one.
 
-**An engine that never reports is a failed engine — an engine that reports nothing to raise is not.** The two are indistinguishable if all you look at is the length of a findings list, so read each engine's outcome rather than its output: engine 1 reports whether its reviewers ran and what its scorers filtered out, each engine 2 agent reports on its own dimension, and engine 3 reports per rule. A clean diff really does produce zero surviving findings — engine 1 alone drops everything under 80 — and treating that as breakage degrades a review that didn't need degrading and tells the user an engine died when it didn't.
+**An engine that never reports is a failed engine — an engine that reports nothing to raise is not.** The two are indistinguishable from the length of a findings list, so read each engine's outcome rather than its output: engine 1 reports whether its reviewers ran and what its scorers filtered out, each engine 2 agent reports on its own dimension, and engine 3 reports per rule. A clean diff really does produce zero surviving findings.
 
-When an engine genuinely didn't report, say so, degrade via *When a plugin is missing* below, and name it in the step 7 summary. The failure mode to refuse outright: reconstructing an engine's output yourself from whatever you can find and handing it to the triage subagent as engine findings. That is session-authored content entering the one channel the skill protects from session influence, and it silently destroys the independence the whole triage step exists for. A review running an engine short is still a review; one running on invented findings isn't.
+When an engine genuinely didn't report, say so, degrade via *When a plugin is missing* below, and name it in the step 7 summary. Refuse outright to reconstruct an engine's output yourself and hand it to triage as engine findings — that is session-authored content entering the channel triage exists to keep independent.
 
 ## Merge and carry forward
 
-Combine every engine that ran into one findings list and dedupe by file, line, and substance (they overlap — two engines may flag the same real bug). Prefer the more specific phrasing. For each surviving finding keep: file, line, what, why, suggested fix, a confidence read (use the code-review plugin's score when present, otherwise judge from how decisively the specialized agent verified it), the source, and whether it was marked as needing external evidence — that mark is what the gate's optional evidence pass works from, so losing it in the merge means the check silently never happens. Confidence and source feed the house-style ordering and the verdict reason back in the SKILL workflow.
+Combine every engine that ran into one findings list and dedupe by file, line, and substance (they overlap — two engines may flag the same real bug). Prefer the more specific phrasing. For each surviving finding keep: file, line, what, why, suggested fix, a confidence read (use the code-review plugin's score when present, otherwise judge from how decisively the specialized agent verified it), the source, and whether it was marked as needing external evidence — the mark feeds the gate's optional evidence pass. Confidence and source feed the house-style ordering and the verdict reason back in the SKILL workflow.
 
 ## False-positive discipline
 
