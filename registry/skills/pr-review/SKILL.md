@@ -1,6 +1,6 @@
 ---
 name: pr-review
-description: Use when authoring a code review of a pull request or merge request on GitHub or GitLab — "review this PR", "do a code review on PR #N", "review this MR", "review my branch", "leave review comments" — including a local-only review ("locally", "for myself", "just my branch", "don't post"). To respond to reviews of a PR you authored, use pr-comments-address instead.
+description: Use when authoring a code review — of a pull request or merge request on GitHub or GitLab ("review this PR", "do a code review on PR #N", "review this MR", "leave review comments"), or of your own local branch without posting ("review my branch", "locally", "for myself", "don't post"). To respond to reviews of a PR you authored, use pr-comments-address instead.
 ---
 
 <!-- No `context: fork`: a forked skill runs as a subagent, and subagents cannot use AskUserQuestion — the results gate in step 5 depends on it. (The Agent tool is not the constraint: subagents can dispatch nested subagents, so the step 2 engines would run fine.) For isolation from other work, invoke this skill in a dedicated session instead. -->
@@ -81,7 +81,7 @@ Follow [references/analysis.md](references/analysis.md) — the same engines wor
 
 The merge is where independence quietly dies: a session that wrote, planned, or debated this change bends verdicts toward its own decisions, and a model is a poor judge of its own anchoring. So triage runs in a **fresh subagent** that never sees this conversation, whether the session touched the change or not.
 
-Dispatch one triage subagent with the Agent tool (`subagent_type: "general-purpose"` — a fresh context; **not** `"fork"`, which inherits this conversation and defeats the isolation). Leave `model:` off — the one deliberate exception to the dispatch rule in [references/analysis.md](references/analysis.md) "Model discipline". Hand it exactly:
+Dispatch one triage subagent with the Agent tool (`subagent_type: "general-purpose"` — a fresh context; **not** `"fork"`, which inherits this conversation and defeats the isolation). Leave `model:` off — see "Model discipline" in [references/analysis.md](references/analysis.md). Hand it exactly:
 
 - the diff and the repo checkout path;
 - every engine's raw findings — file, line, what, why, suggested fix, confidence, source — including the project-rules engine's per-rule outcomes if it ran;
@@ -123,19 +123,19 @@ Rules the matrix travels with:
 
 This is the verdict *intent*; the user picks the verdict at delivery.
 
-**Materialize the draft with `Write`** to `review/pr-<N>-draft.md` — in local mode, which has no PR number, to `review/<BRANCH>-draft.md` (`/` in the branch name becomes `-`, as in `write-review-file`) — in the repo whose code is under review (create `review/` if missing; it stays out of commits, gitignored or per the user's preference). In a multi-repo checkout that means the service's own clone, not the parent — say which path you used. This file is element 1 of the gate contract below: without it there is no draft, whatever the session remembers composing.
+**Materialize the draft with `Write`** to `review/pr-<N>-draft.md` — in local mode, which has no PR number, to `review/<TIMESTAMP>_<BRANCH>-draft.md` (same timestamp and `/`→`-` convention as `write-review-file`, so reused branch names can't collide) — in the repo whose code is under review (create `review/` if missing; it stays out of commits, gitignored or per the user's preference). In a multi-repo checkout that means the service's own clone, not the parent — say which path you used. This file is element 1 of the gate contract below: without it there is no draft, whatever the session remembers composing.
 
 ### 5. Results gate
 
-**Before asking**, re-read the draft against "What never goes in a posted review" and the voice rules in [references/house-style.md](references/house-style.md), and strike every line they name — claimed investigations that didn't run, notes about the review itself, mechanism-first openings, multi-claim sentences. Then confirm the summary opens on the PR and your overall read, not on the first bug.
+**Before asking**, re-read the draft against "What never goes in a posted review", the voice rules, and "The opening" in [references/house-style.md](references/house-style.md), and strike or fix what they name.
 
-**Delivery paths.** `preflight` settled whether drafts work here; that answer picks the row, and the row drives the gate option, step 6, and step 7. On a no-draft platform, say so and why before asking. Never present a publishing action as a draft.
+**Delivery paths.** Step 1's `preflight` settled whether this platform supports draft reviews — that selects which rows below are on offer. The user picks the delivery option at this gate (contract element 4 below), and the chosen row drives workflow steps 6 (deliver) and 7 (report) in this file. On a no-draft platform, say so and why before asking. Never present a publishing action as a draft.
 
 | Path | When | Gate option (the delivery option) | Step 6 delivers | Step 7 reports |
 |---|---|---|---|---|
 | Draft (default) | platform supports draft reviews | **Proceed** | `create-draft-review` | draft review URL — a draft awaiting their submit |
 | Publish now | no draft support (no Draft Notes API, missing token scope, MCP fallback without a draft tool) | **Publish now** | `submit-review` with the verdict | published review URL |
-| File only | no draft support | **Write to a file, post nothing** | `write-review-file`, nothing posted | file path |
+| File only | no draft support | **Write to a file, post nothing** | `write-review-file`, nothing posted | the file's absolute path |
 
 **Two status lines**, chat only — method notes about your own configuration, never part of the posted review:
 
@@ -148,14 +148,14 @@ This is the verdict *intent*; the user picks the verdict at delivery.
 
 1. the step 4 draft file exists in `review/`, written by a `Write` call this session;
 2. this message contains that file's full content as text — summary, architectural notes, every inline finding with its `path:line`, and (public) every thread reply with its target and full body;
-3. `AskUserQuestion` is called with the file path in the question ("full draft in `review/pr-<N>-draft.md`");
-4. the options are **the delivery option from the Delivery paths table** / **Back findings with external sources** / **Change something**.
+3. `AskUserQuestion` is called with the draft file's full absolute path in the question;
+4. the options are **the delivery option from the Delivery paths table** / **Back findings with external sources**.
 
 Missing any element means the gate didn't happen — go back to the missing one. Session-wide brevity or compression modes govern commentary, never elements 1–2: a file path, a recap, or "the draft is above" satisfies nothing, and a memory of having printed is not element 2 — only text visible in this turn is.
 
 - **Proceed** — deliver as-is.
 - **Back findings with external sources** (optional) — the only point in this workflow where anything is fetched from outside the repo; it's a choice rather than a default because it's slow and most findings don't need it. Start with the findings marked as needing external evidence, then any other contestable one. Verify each against a trusted source (official docs, the language or library spec, a high-signal StackOverflow answer or hosted-repo issue, or — for an architectural claim — the project's own sibling repos and artifacts), attach the link in the comment, and **drop claims you can't substantiate** (a finding grounded in the diff stands on its own). Then re-present the revised draft and return to this gate.
-- **Change something** — take the user's edits (reword, drop, split, re-anchor), restate, and confirm, respecting their granularity choices. If their edits read like a standing rule (the same class dropped every review, a repeated verdict override), offer once that `## What blocks merge` can hold it — don't press, and never write the policy file for them without asking.
+A typed answer with edits (reword, drop, split, re-anchor) re-enters the draft: apply them, restate, and confirm. If the edits read like a standing rule (the same class dropped every review, a repeated verdict override), offer once that `## What blocks merge` can hold it — don't press, and never write the policy file for them without asking.
 
 Deliver nothing before the user picks the delivery option — nothing posted, no `write-review-file`; the step 4 draft in `review/` is the one write that happens before the gate.
 
@@ -168,13 +168,13 @@ Posting/saving is automated after approval; judgment is not. In public mode, if 
 
 ### 7. Summarize and loop
 
-Print what was delivered — the Delivery paths row's report (URL or file path) and the inline counts — with the PR URL on its own line in public mode.
+Print what was delivered — the Delivery paths row's report (URL, or the file's full absolute path) and the inline counts — with the PR URL on its own line in public mode.
 
-**Public: end the turn with the summary body verbatim**, in a fenced markdown block, plus the verdict intent and any thread replies sent, stating which Delivery paths result was produced. This is elements 1–2 of the gate contract applied to the summary: only text visible in this turn's final message counts, whatever brevity mode is active — on every turn that ends with the draft created or partially delivered, including turns cut short by errors. On the draft path, the platform may not show the summary until submit, so this message can be the user's only copy of the text to paste.
+**Public: end the turn with the summary body verbatim**, in a fenced markdown block, plus the verdict intent and any thread replies sent, stating which Delivery paths result was produced. Elements 1–2 of the gate contract apply here, on every turn that ends with the draft created or partially delivered. On the draft path, the platform may not show the summary until submit.
 
 **Amendments (public).** Every post-delivery change re-enters step 5: update the step 4 file, run the gate contract, then post. A request to change something approves the **action**, never the **wording**. Amend in place with the platform's edit operation; never delete and recreate.
 
-**Re-review loop (public).** This skill works under `/loop`. On a later round, repeat steps 1–6, diff against your previous review's timestamp, and treat your own prior comments as part of the conversation — raise only what's new or unaddressed, and converge toward approve. Don't itemize the fixes the author made — "everything from the last round is addressed" covers it; see the re-review example in [references/house-style.md](references/house-style.md). The user still approves each round; the loop automates the cadence, not the judgment.
+**Re-review (public).** When the flow re-runs on the same PR, repeat steps 1–6, diff against your previous review's timestamp, and treat your own prior comments as part of the conversation — raise only what's new or unaddressed, and converge toward approve. The user still approves each round.
 
 ## Red flags — stop before delivering
 
