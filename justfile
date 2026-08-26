@@ -18,9 +18,10 @@ build-cli:
 test-cli *ARGS:
     cd cli && npm test {{ARGS}}
 
-# Run script tests for every skill that ships them (registry/skills/*/scripts/*.test.js)
+# Run script tests for every skill that ships them (registry/skills/*/scripts/*.test.js).
+# The glob is unquoted on purpose: the shell expands it, so no node glob support is needed.
 test-skills *ARGS:
-    node --test "registry/skills/*/scripts/*.test.js" {{ARGS}}
+    node --test registry/skills/*/scripts/*.test.js {{ARGS}}
 
 # Publish CLI to npm (bump: patch, minor, or major)
 publish-cli bump="patch":
