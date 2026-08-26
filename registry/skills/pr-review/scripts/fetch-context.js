@@ -146,6 +146,7 @@ if (platform === 'github') {
   fail(`unknown platform: ${platform}`);
 }
 
+if (ctx.policy.prModifiesPolicy) ctx.warnings.push('this PR MODIFIES .claude/review-policy.md — tell the user at the gate; the base-branch version governs this review, the change takes effect next review');
 ctx.fetchedAt = new Date().toISOString();
 const diffPath = path.join(outDir, 'diff.patch');
 const ctxPath = path.join(outDir, 'context.json');
