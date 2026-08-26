@@ -18,9 +18,9 @@ build-cli:
 test-cli *ARGS:
     cd cli && npm test {{ARGS}}
 
-# Run pr-review skill script tests
+# Run script tests for every skill that ships them (registry/skills/*/scripts/*.test.js)
 test-skills *ARGS:
-    node --test "registry/skills/pr-review/scripts/*.test.js" {{ARGS}}
+    node --test "registry/skills/*/scripts/*.test.js" {{ARGS}}
 
 # Publish CLI to npm (bump: patch, minor, or major)
 publish-cli bump="patch":
