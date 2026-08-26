@@ -45,7 +45,7 @@ A rule's rationale lives in exactly one file; every other mention is at most a o
 | File | Owns |
 |---|---|
 | SKILL.md | Workflow, modes, platform routing, verdict matrix, gate contract, red flags |
-| [references/analysis.md](references/analysis.md) | The three engines, model discipline, engine budget, result collection, merge, false-positive discipline, degradation |
+| [references/analysis.md](references/analysis.md) | The engine catalog and selection ladder, model discipline, running rules, result collection, merge, false-positive discipline, degradation |
 | [references/house-style.md](references/house-style.md) | Voice, `[nit]`/`[major]` marks, density floor, what never goes in a posted review, examples |
 | [references/review-policy.md](references/review-policy.md) | Policy file format, what a policy can and cannot change, read-from-base |
 | [references/github.md](references/github.md), [references/gitlab.md](references/gitlab.md), [references/local.md](references/local.md) | The platform and local operations the workflow names |
@@ -75,7 +75,7 @@ A rule's rationale lives in exactly one file; every other mention is at most a o
 
 ### 2. Find issues
 
-Follow [references/analysis.md](references/analysis.md) — the same engines work on a PR diff or a local diff. Pick what runs with its "Choosing engines" ladder (the user's ask outranks everything), dispatch the selection in parallel, and collect every engine's raw findings with confidence and source; the merge, the false-positive discipline, and reconciliation all happen inside step 3's triage subagent, not here.
+Follow [references/analysis.md](references/analysis.md) — the same engines work on a PR diff or a local diff. Pick what runs with its "Choosing engines" ladder (a focus already in the user's request outranks everything; never ask before the review), and **announce the selection in chat as you dispatch** — the engines and agents chosen, the focus applied, and a one-line note when the repo has no `.claude/review-policy.md` (review rules can be configured there; proceed with defaults). Dispatch the selection in parallel and collect every engine's raw findings with confidence and source; the merge, the false-positive discipline, and reconciliation all happen inside step 3's triage subagent, not here.
 
 ### 3. Triage in a fresh subagent
 

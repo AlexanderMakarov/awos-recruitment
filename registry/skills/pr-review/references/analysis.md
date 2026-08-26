@@ -4,56 +4,44 @@
 
 ## Choosing engines
 
-Work down the ladder; the first row that applies decides what runs, and later rows only add — they never override an earlier one:
+Work down the ladder; the first row that applies decides what runs, and later rows only add — they never override an earlier one. Never ask the user anything before the review: the ladder decides from what the request and the repo already say.
 
 | Priority | When | Dispatch |
 |---|---|---|
-| 1 — the user's ask | The request names a focus, depth, or budget ("just check the error handling", "quick pass", "be thorough") | Exactly what serves the ask — the matching specialists, the breadth sweep, or both. |
-| 2 — the policy | The base-branch policy defines `## Project rules` | The project-rules engine (engine 3), alongside whatever else runs — no other engine covers that dimension. |
-| 3 — the default | Otherwise | One engine: the `code-review` plugin (engine 1). An engine 2 specialist joins only when the diff concentrates in its dimension; `code-reviewer` never joins — it re-covers the breadth pass. |
-| 4 — availability | The `code-review` plugin is missing | Engine 2 becomes the engine: `code-reviewer` for breadth plus the applicable specialists. Neither plugin installed → the lighter inline pass in "When a plugin is missing". |
+| 1 — the user's ask | The request already names a focus, depth, or budget ("just check the error handling", "quick pass", "be thorough") | Exactly what serves it — the matching specialists, the breadth pass, or everything applicable. |
+| 2 — the policy | The base-branch policy defines `## Project rules` | The project-rules engine, alongside whatever else runs — no other engine covers that dimension. |
+| 3 — the default | Otherwise | The toolkit engine: `code-reviewer` for breadth, plus the specialists selected from the diff's shape (table below). |
+| 4 — availability | `pr-review-toolkit` is missing | The fallback bundle (the `code-review` plugin). Neither plugin installed → the lighter inline pass in "When a plugin is missing". |
 
-Everything dispatched runs in parallel and stays independent until the merge — wall-clock is the slowest engine, not the sum.
+**The selection is the main session's decision, made from the step 1 diff — nothing is spawned to decide, and an unselected agent is never spawned.** Everything selected dispatches in parallel and stays independent until the merge — wall-clock is the slowest agent, not the sum.
 
-## Engine 1: the code-review plugin (breadth)
+**Announce the run twice.** At dispatch (SKILL step 2): one chat line naming the engines and agents chosen and the focus applied, plus — when the repo has no `.claude/review-policy.md` — a one-line note that review rules can be configured there, then proceed with defaults. At the results gate (SKILL step 5): the Policy and Agents status lines explain how the finished review was made.
 
-The `code-review` plugin runs a strong generic recipe: an eligibility check, CLAUDE.md collection, a change summary, five parallel agents (CLAUDE.md adherence, obvious bugs, git history, prior-PR comments, code-comment guidance), and a 0–100 confidence score per issue filtered at 80. Reuse it for breadth, but take only its findings — not its output format or posting. Treat the score as a breadth filter, not a truth signal — every finding is still cross-checked by triage.
+## The toolkit engine: pr-review-toolkit agents
 
-Locate its command spec and follow its **analysis steps** to produce the scored, filtered findings list:
+The primary engine. Each agent is individually addressable — dispatch with the Agent tool (`subagent_type: "pr-review-toolkit:<agent>"`), giving each the diff and its scope:
 
-```sh
-find ~/.claude/plugins -path '*code-review*/commands/code-review.md' -not -path '*/cache/*' 2>/dev/null | head -1
-```
-
-(If that finds nothing, drop the `-not -path` filter.) `Read` it and follow its analysis steps, then **stop before the step that posts** — its final step comments on the PR in a fixed style with an emoji footer, which this skill replaces. Keep the in-memory findings: file, line, what, why, suggested fix, confidence, and flag reason.
-
-The per-finding scorers are worth keeping rather than cutting. Their score is a breadth filter, not a truth signal, and the <80 cut is what stops engine 1 handing triage its full noise floor — at Haiku, which is what the recipe intended, that filter is cheap.
-
-## Engine 2: pr-review-toolkit agents (depth)
-
-The `pr-review-toolkit` plugin provides specialized review agents that go deeper than a generic pass on the dimension they own. Dispatch them with the Agent tool (`subagent_type: "pr-review-toolkit:<agent>"`), giving each the PR diff and scope. For a large diff, chunk it by file or directory and dispatch per chunk rather than handing each agent the whole thing — a diff that overflows the context window gets reviewed shallowly; note in the summary if a chunk was too big to cover fully. Select by what the diff actually changed — running an agent whose dimension the PR doesn't touch wastes tokens and invites false positives:
-
-| Agent | Run when the diff… | Looks for |
+| Agent | Dispatch when… | Looks for |
 |---|---|---|
-| `code-reviewer` | only as the fallback breadth engine (ladder row 4) — otherwise it re-covers engine 1 | General quality, bugs, project-convention adherence |
-| `pr-test-analyzer` | adds or changes tests | Coverage gaps, weak assertions, flaky-test risk |
-| `silent-failure-hunter` | touches error handling, catch blocks, fallbacks | Swallowed errors, misleading messages, silent failures |
-| `type-design-analyzer` | adds or changes types | Encapsulation, invariants, type-design quality |
-| `comment-analyzer` | adds or changes comments/docs | Comment accuracy vs. code, rot, completeness |
+| `code-reviewer` | always — the breadth pass | General quality, bugs, project-convention adherence |
+| `pr-test-analyzer` | the diff adds or changes tests | Coverage gaps, weak assertions, flaky-test risk |
+| `silent-failure-hunter` | the diff touches error handling, catch blocks, fallbacks | Swallowed errors, misleading messages, silent failures |
+| `type-design-analyzer` | the diff adds or changes types | Encapsulation, invariants, type-design quality |
+| `comment-analyzer` | the diff is comment/doc-heavy | Comment accuracy vs. code, rot, completeness |
 
 `code-simplifier` is for applying simplifications to a working tree, not for reviewing someone else's PR — skip it here.
 
-Give each agent the context its dimension needs, not just the diff: `pr-test-analyzer` can't judge coverage gaps without the existing tests, and `comment-analyzer` needs the surrounding code to tell an outdated comment from a correct one. (These agents carry their own descriptions and system prompts — this skill selects them and feeds them scope; it doesn't re-prompt them.) Run the applicable agents in parallel. Each returns its own findings; treat them as high-signal for their dimension but still subject to the discipline below.
+Give each agent the context its dimension needs, not just the diff: `pr-test-analyzer` can't judge coverage gaps without the existing tests, and `comment-analyzer` needs the surrounding code to tell an outdated comment from a correct one. (These agents carry their own descriptions and system prompts — this skill selects them and feeds them scope; it doesn't re-prompt them.) For a large diff, chunk it by file or directory and dispatch per chunk — a diff that overflows the context window gets reviewed shallowly; note in the step 7 summary if a chunk was too big to cover fully.
 
-## Engine 3: project rules (only when the policy defines them)
+## The project-rules engine (when the policy defines them)
 
-When the base-branch `.claude/review-policy.md` has a `## Project rules` section, run one more engine. A repository's own conventions — "every endpoint needs an auth decorator", "no raw SQL outside `repositories/`", "migrations must be reversible" — are invisible to an engine that has never read them, so this is the one dimension the other two structurally cannot cover. Dispatch a subagent alongside the others, unnamed and in parallel, with the diff, the checkout path, and the rules **verbatim**.
+When the base-branch `.claude/review-policy.md` has a `## Project rules` section, run one more engine. A repository's own conventions — "every endpoint needs an auth decorator", "no raw SQL outside `repositories/`", "migrations must be reversible" — are invisible to an engine that has never read them. Dispatch a subagent alongside the others, unnamed and in parallel, with the diff, the checkout path, and the rules **verbatim**. Don't push the rules into the toolkit agents instead — that re-prompts them and dilutes the dimension each is good at.
 
-Don't push the rules into the `pr-review-toolkit` agents instead. This skill selects those agents and feeds them scope; it doesn't re-prompt them, and injecting project rules into each one would both cross that line and dilute the dimension each agent is actually good at.
+**This engine reports per rule, not only per finding.** Each rule comes back as checked-and-clean, violated (with the findings), or not-applicable-to-this-diff — the per-rule outcome is what shows a clean run as clean rather than silent. Findings come back in the same fields as the other engines ("Merge and carry forward" lists them), tagged source `project-rules` — the false-positive discipline keys on that tag — and scoped to changed lines.
 
-**This engine reports per rule, not only per finding.** Each rule comes back as checked-and-clean, violated (with the findings), or not-applicable-to-this-diff. A project that follows its own rules produces zero violations, and the per-rule outcome is what shows that as a clean run rather than a silent one — the sharpest form of what *An engine that never reports is a failed engine* below asks of every engine.
+## The fallback bundle: the code-review plugin
 
-Findings come back in the same fields as the other engines ("Merge and carry forward" lists them), tagged source `project-rules` — the false-positive discipline keys on that tag — and scoped to changed lines.
+Only when `pr-review-toolkit` is missing. The `code-review` plugin is a single command, not addressable agents: invoke it with the Skill tool (`code-review:code-review`), follow its **analysis steps**, and **stop before the step that posts** — its final step comments on the PR in a fixed style, which this skill replaces. Keep the in-memory findings: file, line, what, why, suggested fix, confidence, and flag reason. Its bundle runs an eligibility check, five parallel reviewers, and per-finding confidence scorers with a <80 cut; honour the models its steps name, and keep the scorers — their cut is what stops the bundle handing triage its full noise floor.
 
 ## Model discipline
 
@@ -61,18 +49,17 @@ Findings come back in the same fields as the other engines ("Merge and carry for
 
 | Dispatch | Model | Why |
 |---|---|---|
-| Engine 1: eligibility check, CLAUDE.md path list, change summary, re-check, per-finding scorers | Haiku | The recipe's own cost model — honour what each step names |
-| Engine 1: the five parallel reviewers | Sonnet | Same recipe |
-| Engine 2: `pr-review-toolkit` specialists | Sonnet | A depth pass over one bounded dimension; an agent whose definition names a model keeps it |
-| Engine 3: project-rules agent | Sonnet | Matching a diff against written rules is checking, not judgment |
+| Toolkit engine: `code-reviewer` and the selected specialists | Sonnet | A bounded pass over one dimension; an agent whose definition names a model keeps it |
+| Project-rules agent | Sonnet | Matching a diff against written rules is checking, not judgment |
+| Fallback bundle internals | What its recipe names per step (Haiku checks and scorers, Sonnet reviewers) | The recipe's own cost model |
 | Scratchpad digest (step 1), triage's mechanical per-finding checks | Haiku | Extraction and matching, not judgment |
 | **Step 3 triage subagent** | **none — inherits the session model** | The one deliberate exception: triage is judgment, not a bounded pass |
 
-## The engine budget
+## Running engines
 
 **"Choosing engines" decides what runs — nothing else joins.** No reviewers beyond the ladder's selection.
 
-**Engines run one level deep.** An agent an engine dispatches does not dispatch agents of its own — verification belongs to the step-3 triage agent. Triage's own mechanical per-finding fan-out is the one sanctioned nesting.
+**Engines run one level deep.** An agent an engine dispatches does not dispatch agents of its own — verification belongs to the step-3 triage agent. Triage's own mechanical per-finding fan-out is the one sanctioned nesting. (The fallback bundle's internal fan-out is the recipe's own and runs from the main session.)
 
 **Bound each engine.** Changed files plus one hop of context, then report.
 
@@ -82,8 +69,6 @@ Findings come back in the same fields as the other engines ("Merge and carry for
 
 ## Collecting the engines' results
 
-Dispatching is the easy half. Getting the results back is where a review quietly loses half its wall-clock, so the mechanics are not optional.
-
 **Dispatch engines as ordinary subagents — never as named background agents.** An unnamed `Agent` call returns its output as the tool result the moment it finishes; a named agent's completion arrives as a background teammate message that can land long after the work is done.
 
 **Enumerate every agent dispatched — count, model, and depth — and carry that roster to the results gate.** The roster is what catches a named agent, an unpinned model, or a depth-2 dispatch while there's still time to abandon it.
@@ -92,13 +77,13 @@ Dispatching is the easy half. Getting the results back is where a review quietly
 
 **Never read agent transcripts to recover a result.** The `.jsonl` files under `subagents/` are harness internals; a mid-flight read returns a partial result indistinguishable from a finished one.
 
-**An engine that never reports is a failed engine — an engine that reports nothing to raise is not.** The two are indistinguishable from the length of a findings list, so read each engine's outcome rather than its output: engine 1 reports whether its reviewers ran and what its scorers filtered out, each engine 2 agent reports on its own dimension, and engine 3 reports per rule. A clean diff really does produce zero surviving findings.
+**An engine that never reports is a failed engine — an engine that reports nothing to raise is not.** The two are indistinguishable from the length of a findings list, so read each engine's outcome rather than its output: each toolkit agent reports on its own dimension, the project-rules engine reports per rule, and the fallback bundle reports whether its reviewers ran and what its scorers filtered out. A clean diff really does produce zero surviving findings.
 
 When an engine genuinely didn't report, say so, degrade via *When a plugin is missing* below, and name it in the step 7 summary. Refuse outright to reconstruct an engine's output yourself and hand it to triage as engine findings — that is session-authored content entering the channel triage exists to keep independent.
 
 ## Merge and carry forward
 
-Combine every engine that ran into one findings list and dedupe by file, line, and substance (they overlap — two engines may flag the same real bug). Prefer the more specific phrasing. For each surviving finding keep: file, line, what, why, suggested fix, a confidence read (use the code-review plugin's score when present, otherwise judge from how decisively the specialized agent verified it), the source, and whether it was marked as needing external evidence — the mark feeds the gate's optional evidence pass. Confidence and source feed the house-style ordering and the verdict reason back in the SKILL workflow.
+Combine every engine that ran into one findings list and dedupe by file, line, and substance (agents overlap — two may flag the same real bug). Prefer the more specific phrasing. For each surviving finding keep: file, line, what, why, suggested fix, a confidence read (use the fallback bundle's score when it ran, otherwise judge from how decisively the agent verified it), the source, and whether it was marked as needing external evidence — the mark feeds the gate's optional evidence pass. Confidence and source feed the house-style ordering and the verdict reason back in the SKILL workflow.
 
 ## False-positive discipline
 
@@ -121,8 +106,8 @@ Apply the same skepticism to automated findings that a careful human reviewer ap
 
 Degrade gracefully; don't hard-fail.
 
-- **No `code-review` plugin:** rely on the `pr-review-toolkit` agents alone.
-- **No `pr-review-toolkit`:** rely on the `code-review` plugin alone.
+- **No `pr-review-toolkit`:** ladder row 4 — the fallback bundle is the engine.
+- **No `code-review` plugin:** nothing changes on the default path; it only matters when the toolkit is also missing.
 - **Neither installed:** tell the user, then do a lighter inline review yourself — work from the diff step 1 already gathered (`fetch-pr-context` in public mode, `get-local-diff` in local), scan changed lines for real bugs and convention violations, assign a rough confidence, and note in the step 7 chat summary — never in the posted review text (house-style.md owns that rule) — that this was a lighter pass. The rest of the workflow (house style, approval gate, post) is unchanged.
 - **Project rules with no agent dispatch:** fold them into the lighter inline pass rather than dropping them — read the diff against each rule yourself and still report per rule. No plugin covers this dimension, so it's the last thing to give up, not the first.
 - **No Agent tool in this context** (rare: a subagent at the nesting depth limit, or a harness without agent dispatch — ordinary subagents and forked skills do have the Agent tool and should run the engines normally): same lighter inline pass as above, and tell the user the parallel engines were skipped and why — re-running the skill from a context with agent dispatch restores them.
