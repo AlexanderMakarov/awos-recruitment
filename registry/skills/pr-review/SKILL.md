@@ -48,7 +48,7 @@ A rule's rationale lives in exactly one file; every other mention is at most a o
 | [references/analysis.md](references/analysis.md) | The engine catalog and selection ladder, model discipline, running rules, result collection, merge, false-positive discipline, degradation |
 | [references/house-style.md](references/house-style.md) | Voice, `[nit]`/`[major]` marks, density floor, what never goes in a posted review, examples |
 | [references/review-policy.md](references/review-policy.md) | Policy file format, what a policy can and cannot change, read-from-base |
-| [references/github.md](references/github.md), [references/gitlab.md](references/gitlab.md), [references/local.md](references/local.md) | The platform and local operations the workflow names |
+| [references/github.md](references/github.md), [references/gitlab.md](references/gitlab.md), [references/local.md](references/local.md) | The platform and local operations the workflow names, implemented by the `scripts/` tools |
 
 ## Input
 
@@ -69,9 +69,8 @@ A rule's rationale lives in exactly one file; every other mention is at most a o
 ### 1. Gather the change and context
 
 - **both modes:** if the request links an off-platform discussion — a Slack thread, meeting notes, a ticket, a design doc — read it **before** analysis: it carries intent and settled decisions the diff and on-platform threads don't show.
-- **public:** run `preflight`, `fetch-pr-context`, and `fetch-existing-comments` from the platform reference, **before** any analysis. `preflight` also settles **whether draft delivery is available on this platform and instance** — carry that answer to step 5. `fetch-existing-comments` includes an explicit pass to list your own prior comments; do it — they're the easiest set to duplicate. When the conversation is large, hand the raw dump to a subagent that returns a structured scratchpad — open threads, settled points, your own prior comments, each with `path:line` — in parallel with fetching the diff; the scratchpad, not the raw conversation, is what analysis carries (with no agent dispatch, compact it inline). Comment only on lines the PR changed.
-- **local:** run `resolve-base` and `get-local-diff` from [references/local.md](references/local.md). There's no conversation to fetch.
-- **both modes, once the base is known:** load the policy with `git show <base>:.claude/review-policy.md` — the base branch, never the PR head ([references/review-policy.md](references/review-policy.md) owns why). If the PR itself modifies the policy, say so at the gate; the change governs the *next* review. Note which sections it defines: you state that at the gate and apply them at steps 2–4.
+- **public:** run `preflight` and `fetch-context` from the platform reference, **before** any analysis. `fetch-context` writes `context.json` — normalized threads, your own prior comments (`myPriorInline`, the set most easily duplicated), the base-branch policy with its sections and whether the PR modifies it (say so at the gate; the change governs the *next* review), and **draft capability** (carry that to step 5) — plus `diff.patch`. Those two files, not raw platform output, are what analysis carries. Comment only on lines the PR changed.
+- **local:** run `resolve-base` and `get-local-diff` from [references/local.md](references/local.md), and load the policy with `git show <base>:.claude/review-policy.md` — the base branch, never the PR head ([references/review-policy.md](references/review-policy.md) owns why). There's no conversation to fetch.
 
 ### 2. Find issues
 
@@ -86,12 +85,12 @@ Dispatch one triage subagent with the Agent tool (`subagent_type: "general-purpo
 - the diff and the repo checkout path;
 - every engine's raw findings — file, line, what, why, suggested fix, confidence, source — including the project-rules engine's per-rule outcomes if it ran;
 - the policy's `## Scope` section verbatim, if there is one;
-- **public:** the step 1 scratchpad, plus any off-platform source material (verbatim or an extractive digest of what was decided — never your conclusions about the change);
+- **public:** the step 1 `context.json` and `diff.patch` paths — read them as given; never re-run `fetch-context` (a concurrent review would cross-contaminate a re-fetch) — plus any off-platform source material (verbatim or an extractive digest of what was decided — never your conclusions about the change);
 - the path to [references/analysis.md](references/analysis.md), with the instruction to apply its "Merge and carry forward" and "False-positive discipline" sections.
 
 Withhold everything else — what this session intended, designed, or argued about the change: the subagent's whole world is the diff, the engines' output, and the recorded conversation, so its verdicts can't defend decisions it never saw.
 
-The subagent merges and dedupes every engine's output into one findings list, then applies the false-positive discipline from the repo only (a finding marked as needing external evidence keeps that mark); it may fan mechanical per-finding checks out to nested small-model subagents. **Public:** it also reconciles against the scratchpad — a finding on a `path:line` `$ME` already commented on becomes a `reply-to-thread` that builds on that thread (even if resolved); an open thread gets a reply (agree, build on, or push back) instead of a duplicate; settled points are dropped. It returns the surviving findings (confidence and source intact) and the thread-reply plan. **Local:** same subagent, no scratchpad.
+The subagent merges and dedupes every engine's output into one findings list, then applies the false-positive discipline from the repo only (a finding marked as needing external evidence keeps that mark); it may fan mechanical per-finding checks out to nested small-model subagents. **Public:** it also reconciles against `context.json` — a finding on a `path:line` `$ME` already commented on becomes a `reply-to-thread` that builds on that thread (even if resolved); an open thread gets a reply (agree, build on, or push back) instead of a duplicate; settled points are dropped. It returns the surviving findings (confidence and source intact) and the thread-reply plan. **Local:** same subagent, no conversation to reconcile.
 
 If agent dispatch is unavailable (rare — the nesting depth limit, where the engines already degraded to the inline pass): triage inline, re-deriving each verdict from the diff and the engines' output rather than from what you remember intending, and carry a one-line independence caveat into the step 7 summary (never into the posted review).
 

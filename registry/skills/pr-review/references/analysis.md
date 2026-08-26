@@ -52,7 +52,7 @@ Only when `pr-review-toolkit` is missing. The `code-review` plugin is a single c
 | Toolkit engine: `code-reviewer` and the selected specialists | Sonnet | A bounded pass over one dimension; an agent whose definition names a model keeps it |
 | Project-rules agent | Sonnet | Matching a diff against written rules is checking, not judgment |
 | Fallback bundle internals | What its recipe names per step (Haiku checks and scorers, Sonnet reviewers) | The recipe's own cost model |
-| Scratchpad digest (step 1), triage's mechanical per-finding checks | Haiku | Extraction and matching, not judgment |
+| Triage's mechanical per-finding checks | Haiku | Matching, not judgment |
 | **Step 3 triage subagent** | **none — inherits the session model** | The one deliberate exception: triage is judgment, not a bounded pass |
 
 ## Running engines
@@ -65,7 +65,7 @@ Only when `pr-review-toolkit` is missing. The `code-review` plugin is a single c
 
 **Engines read the repo, not the network.** Verification inside an engine means the code, the diff, and the repo's own artifacts — `Read` the file, `Grep` the sibling module, open the test that covers it. A finding that can't be settled from the repo — an API that may not exist, a spec version, an upstream default — comes back with the open question attached, confidence lowered, marked as needing external evidence; step 5's "Back findings with external sources" is where the user opts into that fetch.
 
-**Hand context over by path, not inline.** Write the diff and the PR context to one scratchpad file and give each agent the path plus its scope line.
+**Hand context over by path, not inline.** `fetch-context` already wrote `diff.patch` and `context.json` — give each agent those paths plus its scope line (local mode: write the diff to one file first).
 
 ## Collecting the engines' results
 
