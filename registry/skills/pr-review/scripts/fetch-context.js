@@ -10,10 +10,7 @@
 // Stdout:  a compact summary + the two paths. Read context.json selectively; don't re-fetch.
 const fs = require('fs');
 const path = require('path');
-const { run, runJson, glabPaginated, fail, emit, parseArgs, policySections } = require('./lib');
-
-// True only when the diff actually changes the policy FILE — a diff header, not the path in prose.
-const policyChanged = (d) => /^(diff --git .*|[+]{3} [ab]?\/?.*)\.claude\/review-policy\.md/m.test(d);
+const { run, runJson, glabPaginated, policyChanged, fail, emit, parseArgs, policySections } = require('./lib');
 
 const { flags } = parseArgs(process.argv.slice(2));
 const { platform, host, repo, me } = flags;

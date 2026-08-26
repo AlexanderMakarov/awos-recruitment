@@ -32,20 +32,51 @@ function runJson(cmd, args, opts = {}) {
   }
 }
 
-// glab api --paginate emits one JSON array per page; concatenate them.
-function glabPaginated(host, path) {
-  const r = run('glab', ['api', '--hostname', host, '--paginate', path], { env: { GITLAB_HOST: host } });
-  if (!r.ok) return r;
+// glab api --paginate emits one JSON array per page; split and flatten them.
+function splitGlabPages(out) {
   const pages = [];
-  // Pages arrive as consecutive JSON arrays; split conservatively.
-  const chunks = r.out.split(/\n(?=\[)/);
+  const chunks = out.split(/\n(?=\[)/);
   for (const c of chunks) {
     const t = c.trim();
     if (!t) continue;
-    try { pages.push(JSON.parse(t)); } catch { /* partial line noise */ }
+    try { pages.push(JSON.parse(t)); continue; } catch { /* fall through */ }
+    // Trailing non-JSON noise after a page must not lose the page itself.
+    const end = t.lastIndexOf(']');
+    if (end > 0) { try { pages.push(JSON.parse(t.slice(0, end + 1))); } catch { /* noise only */ } }
   }
-  return { ok: true, json: pages.flat() };
+  return pages.flat();
 }
+
+function glabPaginated(host, path) {
+  const r = run('glab', ['api', '--hostname', host, '--paginate', path], { env: { GITLAB_HOST: host } });
+  if (!r.ok) return r;
+  return { ok: true, json: splitGlabPages(r.out) };
+}
+
+// Pure host classification; the CLI-probe fallback lives in preflight.
+function classifyHost(host) {
+  if (!host) return null;
+  if (host === 'github.com' || /(^|\.)ghe\./.test(host)) return 'github';
+  if (/gitlab/.test(host)) return 'gitlab';
+  return null;
+}
+
+// Parse a PR/MR reference. owner/repo#N is GitHub syntax; group/project!N is GitLab's —
+// the separator is a platform signal.
+function parsePrRef(ref) {
+  let host = null, repo = null, pr = null, platform = null, m;
+  if ((m = String(ref || '').match(/^https?:\/\/([^/]+)\/(.+?)\/(?:-\/)?(?:pull|merge_requests)\/(\d+)/))) {
+    host = m[1]; repo = m[2].replace(/\/(?:-\/)?$/, ''); pr = Number(m[3]);
+  } else if ((m = String(ref || '').match(/^([\w.-]+(?:\/[\w.-]+)+)([#!])(\d+)$/))) {
+    repo = m[1]; pr = Number(m[3]); platform = m[2] === '!' ? 'gitlab' : 'github';
+  } else if (/^\d+$/.test(String(ref || ''))) {
+    pr = Number(ref);
+  }
+  return { host, repo, pr, platform };
+}
+
+// True only when a diff actually changes the policy FILE — a diff header, not the path in prose.
+const policyChanged = (d) => /^(diff --git .*|[+]{3} [ab]?\/?.*)\.claude\/review-policy\.md/m.test(d);
 
 function fail(msg, extra = {}) {
   process.stdout.write(JSON.stringify({ ok: false, error: msg, ...extra }, null, 2) + '\n');
@@ -83,4 +114,4 @@ function policySections(md) {
   return POLICY_SECTIONS.filter((s) => new RegExp(`^##\\s+${s}\\s*$`, 'm').test(md));
 }
 
-module.exports = { run, runJson, glabPaginated, fail, emit, readFileArg, parseArgs, policySections };
+module.exports = { run, runJson, glabPaginated, splitGlabPages, classifyHost, parsePrRef, policyChanged, fail, emit, readFileArg, parseArgs, policySections };

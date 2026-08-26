@@ -18,6 +18,10 @@ build-cli:
 test-cli *ARGS:
     cd cli && npm test {{ARGS}}
 
+# Run pr-review skill script tests
+test-skills *ARGS:
+    node --test "registry/skills/pr-review/scripts/*.test.js" {{ARGS}}
+
 # Publish CLI to npm (bump: patch, minor, or major)
 publish-cli bump="patch":
     cd cli && npm version {{bump}} && npm publish --access public

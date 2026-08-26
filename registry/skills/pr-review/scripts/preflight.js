@@ -10,7 +10,7 @@
 //   public:  { ok, mode:"public", platform, host, repo, pr, me, draftHint }
 //   local:   { ok, mode:"local", branch, base, defaultBranch }
 //   unresolvable: { ok:false, ask:true, reason } (exit 2) — the skill asks the user.
-const { run, runJson, parseArgs, emit } = require('./lib');
+const { run, runJson, parseArgs, parsePrRef, classifyHost, emit } = require('./lib');
 
 const { flags, pos } = parseArgs(process.argv.slice(2));
 
@@ -22,9 +22,8 @@ function gitRemoteHost() {
 }
 
 function platformForHost(host) {
-  if (!host) return null;
-  if (host === 'github.com' || /(^|\.)ghe\./.test(host)) return 'github';
-  if (/gitlab/.test(host)) return 'gitlab';
+  const byName = classifyHost(host);
+  if (byName || !host) return byName;
   // Unknown host: whichever CLI knows it wins.
   if (run('gh', ['auth', 'status', '--hostname', host]).ok) return 'github';
   if (run('glab', ['auth', 'status', '--hostname', host], { env: { GITLAB_HOST: host } }).ok) return 'gitlab';
@@ -41,7 +40,9 @@ if (flags.local) {
     const m = show.out.match(/HEAD branch: (\S+)/);
     if (m) defaultBranch = m[1];
   }
-  let base = pos[0] || null;
+  // `--local [base]`: the base may arrive as a positional, or swallowed by the
+  // flag parser as --local's value — accept both.
+  let base = pos[0] || (typeof flags.local === 'string' ? flags.local : null);
   if (!base && defaultBranch) {
     base = run('git', ['rev-parse', '--verify', `origin/${defaultBranch}`]).ok
       ? `origin/${defaultBranch}` : defaultBranch;
@@ -52,17 +53,7 @@ if (flags.local) {
 }
 
 const ref = pos[0] || '';
-let host = null, repo = null, pr = null, platform = null;
-
-let m;
-if ((m = ref.match(/^https?:\/\/([^/]+)\/(.+?)\/(?:-\/)?(?:pull|merge_requests)\/(\d+)/))) {
-  host = m[1]; repo = m[2].replace(/\/(?:-\/)?$/, ''); pr = Number(m[3]);
-} else if ((m = ref.match(/^([\w.-]+(?:\/[\w.-]+)+)([#!])(\d+)$/))) {
-  // owner/repo#N is GitHub syntax; GitLab's is group/project!N — the separator is a platform signal.
-  repo = m[1]; pr = Number(m[3]); platform = m[2] === '!' ? 'gitlab' : 'github';
-} else if (/^\d+$/.test(ref)) {
-  pr = Number(ref);
-}
+let { host, repo, pr, platform } = parsePrRef(ref);
 
 platform = platform || platformForHost(host);
 if (!platform) { host = host || gitRemoteHost(); platform = platformForHost(host); }
