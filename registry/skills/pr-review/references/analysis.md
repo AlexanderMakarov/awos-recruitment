@@ -1,12 +1,23 @@
 # Finding issues — review engines
 
-> **Part of:** [pr-review](../SKILL.md). How to find issues by orchestrating existing review plugins instead of hand-rolling analysis. Run both engines, merge, and carry confidence forward.
+> **Part of:** [pr-review](../SKILL.md). How to find issues by orchestrating existing review plugins instead of hand-rolling analysis.
 
-The two engines are independent until the merge — don't run them back to back. Dispatch the `pr-review-toolkit` agents while the `code-review` sweep is still running; wall-clock is the slower engine, not the sum.
+## Choosing engines
+
+Work down the ladder; the first row that applies decides what runs, and later rows only add — they never override an earlier one:
+
+| Priority | When | Dispatch |
+|---|---|---|
+| 1 — the user's ask | The request names a focus, depth, or budget ("just check the error handling", "quick pass", "be thorough") | Exactly what serves the ask — the matching specialists, the breadth sweep, or both. |
+| 2 — the policy | The base-branch policy defines `## Project rules` | The project-rules engine (engine 3), alongside whatever else runs — no other engine covers that dimension. |
+| 3 — the default | Otherwise | One engine: the `code-review` plugin (engine 1). An engine 2 specialist joins only when the diff concentrates in its dimension; `code-reviewer` never joins — it re-covers the breadth pass. |
+| 4 — availability | The `code-review` plugin is missing | Engine 2 becomes the engine: `code-reviewer` for breadth plus the applicable specialists. Neither plugin installed → the lighter inline pass in "When a plugin is missing". |
+
+Everything dispatched runs in parallel and stays independent until the merge — wall-clock is the slowest engine, not the sum.
 
 ## Engine 1: the code-review plugin (breadth)
 
-The `code-review` plugin runs a strong generic recipe: an eligibility check, CLAUDE.md collection, a change summary, five parallel agents (CLAUDE.md adherence, obvious bugs, git history, prior-PR comments, code-comment guidance), and a 0–100 confidence score per issue filtered at 80. Reuse it for breadth, but take only its findings — not its output format or posting. Treat the score as a breadth filter, not a truth signal — every finding is still cross-checked by engine 2 and triage.
+The `code-review` plugin runs a strong generic recipe: an eligibility check, CLAUDE.md collection, a change summary, five parallel agents (CLAUDE.md adherence, obvious bugs, git history, prior-PR comments, code-comment guidance), and a 0–100 confidence score per issue filtered at 80. Reuse it for breadth, but take only its findings — not its output format or posting. Treat the score as a breadth filter, not a truth signal — every finding is still cross-checked by triage.
 
 Locate its command spec and follow its **analysis steps** to produce the scored, filtered findings list:
 
@@ -24,7 +35,7 @@ The `pr-review-toolkit` plugin provides specialized review agents that go deeper
 
 | Agent | Run when the diff… | Looks for |
 |---|---|---|
-| `code-reviewer` | always | General quality, bugs, project-convention adherence |
+| `code-reviewer` | only as the fallback breadth engine (ladder row 4) — otherwise it re-covers engine 1 | General quality, bugs, project-convention adherence |
 | `pr-test-analyzer` | adds or changes tests | Coverage gaps, weak assertions, flaky-test risk |
 | `silent-failure-hunter` | touches error handling, catch blocks, fallbacks | Swallowed errors, misleading messages, silent failures |
 | `type-design-analyzer` | adds or changes types | Encapsulation, invariants, type-design quality |
@@ -59,7 +70,7 @@ Findings come back in the same fields as the other engines ("Merge and carry for
 
 ## The engine budget
 
-**Every applicable engine runs — this is not a pick-one menu.** Engines 1 and 2 always run together (they cross-check each other); engine 3 joins only when the policy defines rules. Fewer engines is the degraded path in "When a plugin is missing" below, never a choice. And only these three: no extra reviewers on top.
+**"Choosing engines" decides what runs — nothing else joins.** No reviewers beyond the ladder's selection.
 
 **Engines run one level deep.** An agent an engine dispatches does not dispatch agents of its own — verification belongs to the step-3 triage agent. Triage's own mechanical per-finding fan-out is the one sanctioned nesting.
 

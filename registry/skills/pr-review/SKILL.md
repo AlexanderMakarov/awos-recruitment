@@ -32,7 +32,7 @@ The workflow below is platform-agnostic and names operations (`preflight`, `fetc
 
 ## Engines
 
-This skill orchestrates existing review engines rather than reinventing analysis (both modes). The engines, their models and budget, result collection, merge, false-positive discipline, and degradation are all owned by [references/analysis.md](references/analysis.md).
+This skill orchestrates existing review engines rather than reinventing analysis (both modes). Engine selection (the user's ask first), models, budget, result collection, merge, false-positive discipline, and degradation are all owned by [references/analysis.md](references/analysis.md).
 
 ## Review policy (per project)
 
@@ -58,7 +58,7 @@ A rule's rationale lives in exactly one file; every other mention is at most a o
 
 ```
 - [ ] 1. Gather the change and context
-- [ ] 2. Find issues (code-review + applicable pr-review-toolkit agents)
+- [ ] 2. Find issues (engines picked by the "Choosing engines" ladder)
 - [ ] 3. Triage in a fresh subagent (merge, discipline; public: reconcile)
 - [ ] 4. Draft in house style: summary, architectural notes, inline findings
 - [ ] 5. Results gate: print the draft and ask — back with sources / proceed / change
@@ -75,7 +75,7 @@ A rule's rationale lives in exactly one file; every other mention is at most a o
 
 ### 2. Find issues
 
-Follow [references/analysis.md](references/analysis.md) — the same engines work on a PR diff or a local diff. Run the `code-review` sweep and the applicable `pr-review-toolkit` agents in parallel, plus the project-rules engine when the policy defines `## Project rules`. Collect every engine's raw findings with confidence and source; the merge, the false-positive discipline, and reconciliation all happen inside step 3's triage subagent, not here.
+Follow [references/analysis.md](references/analysis.md) — the same engines work on a PR diff or a local diff. Pick what runs with its "Choosing engines" ladder (the user's ask outranks everything), dispatch the selection in parallel, and collect every engine's raw findings with confidence and source; the merge, the false-positive discipline, and reconciliation all happen inside step 3's triage subagent, not here.
 
 ### 3. Triage in a fresh subagent
 
@@ -186,7 +186,7 @@ Each line is a hard stop; the owning section carries the full rule.
 - Method notes, coverage caveats, or any line about the review itself in the posted text (house-style.md: same section).
 - A `[major]` finding alongside an approve/comment intent, or request-changes with no `[major]` (step 4).
 - Reconstructing a silent engine's findings and passing them to triage as engine output (analysis.md).
-- A named background agent, an unpinned model outside triage, a depth-2 fan-out, or a fourth engine (analysis.md).
+- A named background agent, an unpinned model outside triage, a depth-2 fan-out, or an engine outside the ladder's selection (analysis.md).
 - Polling with `sleep`/`until` loops, or reading agent transcripts to recover results (analysis.md).
 - Handing triage this session's reasoning, intent, or debate — or dispatching it as a fork that inherits them (step 3).
 - An engine or triage agent reaching the network — external evidence is the user's call at the gate (analysis.md).
