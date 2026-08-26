@@ -94,7 +94,3 @@ The policy tunes what the review *thinks*, never what it is *allowed to do*. The
 - the ban on force-pushing.
 
 A policy cannot make the reviewer post without asking, and that is deliberate: the gate is what makes everything above it safe to get wrong.
-
-## Where policy notices show up
-
-In the chat with whoever is running the review — which policy was loaded, any line that was ignored, and whether the PR modifies the policy. Never in the posted review. The PR author is owed findings about their code, not notes about the reviewer's configuration, and they can read the policy file themselves.

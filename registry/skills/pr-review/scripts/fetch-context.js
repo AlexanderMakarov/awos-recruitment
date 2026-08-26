@@ -148,8 +148,9 @@ if (platform === 'github') {
 
 if (ctx.policy.prModifiesPolicy) ctx.warnings.push('this PR MODIFIES .claude/review-policy.md — tell the user at the gate; the base-branch version governs this review, the change takes effect next review');
 ctx.fetchedAt = new Date().toISOString();
-const diffPath = path.join(outDir, 'diff.patch');
-const ctxPath = path.join(outDir, 'context.json');
+// Absolute paths in all output — the session and its subagents may run with different cwds.
+const diffPath = path.resolve(outDir, 'diff.patch');
+const ctxPath = path.resolve(outDir, 'context.json');
 fs.writeFileSync(diffPath, diffText);
 fs.writeFileSync(ctxPath, JSON.stringify(ctx, null, 2));
 

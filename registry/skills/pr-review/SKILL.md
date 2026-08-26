@@ -1,6 +1,6 @@
 ---
 name: pr-review
-description: Use when authoring a code review — of a pull request or merge request on GitHub or GitLab ("review this PR", "do a code review on PR #N", "review this MR", "leave review comments"), or of your own local branch without posting ("review my branch", "locally", "for myself", "don't post"). To respond to reviews of a PR you authored, use pr-comments-address instead.
+description: Use when asked to author a code review of a change — a pull request or merge request on GitHub or GitLab ("review this PR", "do a code review on PR #N", "review this MR", "leave review comments") or a local branch ("review my branch", "review locally", "don't post"). Not for addressing reviewer feedback on a PR you authored — the pr-comments-address skill does that.
 ---
 
 <!-- No `context: fork`: a forked skill runs as a subagent, and subagents cannot use AskUserQuestion — the results gate in step 5 depends on it. (The Agent tool is not the constraint: subagents can dispatch nested subagents, so the step 2 engines would run fine.) For isolation from other work, invoke this skill in a dedicated session instead. -->
@@ -122,7 +122,7 @@ Rules the matrix travels with:
 
 This is the verdict *intent*; the user picks the verdict at delivery.
 
-**Materialize the draft with `Write`** to `review/pr-<N>-draft.md` — in local mode, which has no PR number, to `review/<TIMESTAMP>_<BRANCH>-draft.md` (same timestamp and `/`→`-` convention as `write-review-file`, so reused branch names can't collide) — in the repo whose code is under review (create `review/` if missing; it stays out of commits, gitignored or per the user's preference). In a multi-repo checkout that means the service's own clone, not the parent — say which path you used. This file is element 1 of the gate contract below: without it there is no draft, whatever the session remembers composing.
+**Materialize the draft with `Write`** to `review/pr-<N>-draft.md` — in local mode, which has no PR number, to `review/<TIMESTAMP>_<BRANCH>-draft.md` (same timestamp and `/`→`-` convention as `write-review-file`, so reused branch names can't collide) — in the repo whose code is under review (create `review/` if missing; it stays out of commits, gitignored or per the user's preference). In a multi-repo checkout that means the service's own clone, not the parent — say which path you used. Print the file's full absolute path in chat the moment it's written — every file this skill produces is reported by absolute path. This file is element 1 of the gate contract below: without it there is no draft, whatever the session remembers composing.
 
 ### 5. Results gate
 

@@ -22,3 +22,10 @@ jobs:
 
       - name: Run tests
         run: cd server && uv run pytest
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run pr-review skill script tests
+        run: node --test "registry/skills/pr-review/scripts/*.test.js"
