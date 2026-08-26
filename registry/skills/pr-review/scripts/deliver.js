@@ -119,7 +119,7 @@ if (op === 'create-draft') {
 
 if (op === 'publish-now') {
   if (platform !== 'gitlab') fail('publish-now is the GitLab DRAFTS=no path; on GitHub use submit');
-  const body = readFileArg(flags['body-file'], '--body-file');
+  readFileArg(flags['body-file'], '--body-file'); // validate up front; the summary itself posts later via reply-top
   const comments = JSON.parse(readFileArg(flags['comments-file'], '--comments-file'));
   const refs = ctx.diffRefs || {};
   const posted = []; const remaining = [...comments];
