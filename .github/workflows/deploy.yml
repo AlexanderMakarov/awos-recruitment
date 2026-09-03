@@ -25,6 +25,8 @@ env:
 
 jobs:
   deploy:
+    # Soft-fork / personal clones must not assume Provectus AWS OIDC.
+    if: github.repository == 'provectus/awos-recruitment'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

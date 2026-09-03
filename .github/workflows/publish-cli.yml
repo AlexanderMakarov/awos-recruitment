@@ -20,9 +20,11 @@ permissions:
 
 jobs:
   publish:
+    # Soft-fork / personal clones must not publish @provectusinc / @provectus scopes.
     if: |
-      (github.event.pull_request.merged == true &&
-       contains(github.event.pull_request.labels.*.name, 'release'))
+      github.repository == 'provectus/awos-recruitment' &&
+      github.event.pull_request.merged == true &&
+      contains(github.event.pull_request.labels.*.name, 'release')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
